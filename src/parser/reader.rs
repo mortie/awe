@@ -1,3 +1,8 @@
+#[derive(Copy, Clone)]
+pub struct SeekPoint {
+    idx: usize,
+}
+
 pub struct Reader<'a> {
     pub filename: String,
     pub line: u32,
@@ -75,5 +80,13 @@ impl<'a> Reader<'a> {
             self.consume();
             n -= 1;
         }
+    }
+
+    pub fn tell(&self) -> SeekPoint {
+        SeekPoint{idx: self.idx}
+    }
+
+    pub fn seek(&mut self, point: SeekPoint) {
+        self.idx = point.idx;
     }
 }

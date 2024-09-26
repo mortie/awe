@@ -1,24 +1,109 @@
 use super::ast;
-use super::reader::Reader;
+use super::reader::{Reader, SeekPoint};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+pub enum ErrorKind {
+    UnexpectedEOF,
+    UnexpectedChar(u8),
+    ExpectedChar(u8),
+    BadKeyword,
+    NoMatchingParse,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ParseError {
-    pub filename: String,
     pub line: u32,
     pub col: u32,
-    pub msg: String,
+    pub kind: ErrorKind,
+}
+
+impl ParseError {
+    fn new(r: &Reader, kind: ErrorKind) -> Self {
+        Self {
+            line: r.line,
+            col: r.col,
+            kind,
+        }
+    }
+
+    fn unexpected_eof(r: &Reader) -> Self {
+        Self::new(r, ErrorKind::UnexpectedEOF)
+    }
+
+    fn unexpected_char(r: &Reader, ch: u8) -> Self {
+        Self::new(r, ErrorKind::UnexpectedChar(ch))
+    }
+
+    fn unexpected_maybe(r: &Reader, ch: Option<u8>) -> Self {
+        if let Some(ch) = ch {
+            Self::unexpected_char(r, ch)
+        } else {
+            Self::unexpected_eof(r)
+        }
+    }
+
+    fn expected_char(r: &Reader, ch: u8) -> Self {
+        Self::new(r, ErrorKind::ExpectedChar(ch))
+    }
+
+    fn bad_keyword(r: &Reader) -> Self {
+        Self::new(r, ErrorKind::BadKeyword)
+    }
+
+    fn unexpected_peek(r: &Reader) -> Self {
+        Self::unexpected_maybe(r, r.peek())
+    }
 }
 
 type Result<T> = std::result::Result<T, ParseError>;
 
-macro_rules! err {
-    ($r: ident, $($msg: tt)*) => {
-        Err(ParseError{
-            filename: $r.filename.clone(),
-            line: $r.line,
-            col: $r.col,
-            msg: format!($($msg)*),
-        })
+struct Combinator<'a, 'b> {
+    r: &'a mut Reader<'b>,
+    error: Option<ParseError>,
+    point: SeekPoint,
+}
+
+impl<'a, 'b> Combinator<'a, 'b> {
+    fn new(r: &'a mut Reader<'b>) -> Self {
+        whitespace(r);
+        let point = r.tell();
+        Self {
+            r,
+            error: None,
+            point,
+        }
+    }
+
+    fn consider_error(&mut self, new_err: ParseError) {
+        let Some(err) = self.error else {
+            self.error = Some(new_err);
+            return;
+        };
+
+        if new_err.line > err.line {
+            self.error = Some(new_err);
+        } else if new_err.line == err.line && new_err.col > err.col {
+            self.error = Some(new_err);
+        }
+    }
+
+    fn err(&mut self) -> ParseError {
+        self.r.seek(self.point);
+        if let Some(err) = self.error {
+            err
+        } else {
+            ParseError::new(self.r, ErrorKind::NoMatchingParse)
+        }
+    }
+}
+
+macro_rules! try_parse {
+    ($c: tt, $func: tt) => {
+        $c.r.seek($c.point);
+        match $func($c.r) {
+            Ok(ok) => return Ok(ok),
+            Err(err) => $c.consider_error(err),
+        };
     }
 }
 
@@ -62,20 +147,18 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
     let mut ident = ast::Ident::new();
 
     let Some(ch) = r.peek() else {
-        return err!(r, "Unexpected EOF");
+        return Err(ParseError::unexpected_eof(r));
     };
 
     if !is_alpha(ch) {
-        return err!(
-            r, "Non-alphabetic character at the start of identifier: '{}'", ch as char
-        );
+        return Err(ParseError::unexpected_char(r, ch));
     }
     ident.push(ch as char);
     r.consume();
 
     loop {
         let Some(ch) = r.peek() else {
-            return Ok(ident);
+            return Err(ParseError::unexpected_eof(r));
         };
 
         if !is_alnum(ch) {
@@ -87,10 +170,11 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
     };
 }
 
-fn qualified_ident_after_ident(
-    r: &mut Reader,
-    ident: ast::Ident,
-) -> Result<ast::QualifiedIdent> {
+/// QualifiedIdent ::= Ident | Ident '::' QualifiedIdent
+pub fn qualified_ident(r: &mut Reader) -> Result<ast::QualifiedIdent> {
+    whitespace(r);
+    let ident = identifier(r)?;
+
     let mut idents = ast::QualifiedIdent::new();
     idents.push(ident);
 
@@ -104,15 +188,11 @@ fn qualified_ident_after_ident(
     }
 }
 
-/// QualifiedIdent ::= Ident | (Ident '::' QualifiedIdent)
-pub fn qualified_ident(r: &mut Reader) -> Result<ast::QualifiedIdent> {
+/// TypeParams ::= QualifiedIdent | (QualifiedIdent ',' TypeParams)
+/// TypeSpec ::= QualifiedIdent ('[' TypeParams ']')?
+pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
     whitespace(r);
-    let ident = identifier(r)?;
-    qualified_ident_after_ident(r, ident)
-}
-
-fn type_spec_after_ident(r: &mut Reader, ident: ast::Ident) -> Result<ast::TypeSpec> {
-    let ident = qualified_ident_after_ident(r, ident)?;
+    let ident = qualified_ident(r)?;
     let mut params = Vec::<ast::QualifiedIdent>::new();
 
     if r.peek_cmp_consume(b"[") {
@@ -124,7 +204,7 @@ fn type_spec_after_ident(r: &mut Reader, ident: ast::Ident) -> Result<ast::TypeS
             if r.peek_cmp_consume(b"]") {
                 break;
             } else if !r.peek_cmp_consume(b",") {
-                return err!(r, "Expected ',' or ']', got {:?}", ch);
+                return Err(ParseError::unexpected_maybe(r, ch));
             }
         }
     }
@@ -132,106 +212,147 @@ fn type_spec_after_ident(r: &mut Reader, ident: ast::Ident) -> Result<ast::TypeS
     Ok(ast::TypeSpec{ident, params})
 }
 
-/// TypeParams ::= QualifiedIdent | (QualifiedIdent ',' TypeParams)
-/// TypeSpec ::= QualifiedIdent ('[' TypeParams ']')?
-pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
-    whitespace(r);
-    let ident = identifier(r)?;
-    type_spec_after_ident(r, ident)
-}
-
 /// TypeParam ::= TypeSpec
 pub fn type_param(r: &mut Reader) -> Result<ast::TypeParam> {
     Ok(ast::TypeParam::Type(Box::new(type_spec(r)?)))
 }
 
-fn expression_after_ident(
-    r: &mut Reader,
-    ident: ast::Ident,
-) -> Result<ast::Expression> {
-    whitespace(r);
+/// ExprList ::= (Expression ','? | Expression ',' ExprList)?
+pub fn expr_list(r: &mut Reader) -> Result<Vec<ast::Expression>> {
+    let mut exprs = Vec::<ast::Expression>::new();
 
-    if r.peek_cmp_consume(b"=") {
-        Ok(ast::Expression::Assignment(ident, Box::new(expression(r)?)))
-    } else if ident == "uninitialized" {
-        let Some(ch) = r.peek() else {
-            return Ok(ast::Expression::Uninitialized(None))
+    loop {
+        let point = r.tell();
+        let Ok(expr) = expression(r) else {
+            r.seek(point);
+            return Ok(exprs);
         };
 
-        if is_alnum(ch) {
-            Ok(ast::Expression::Uninitialized(Some(type_spec(r)?)))
-        } else {
-            Ok(ast::Expression::Uninitialized(None))
+        exprs.push(expr);
+        whitespace(r);
+
+        if !r.peek_cmp_consume(b",") {
+            return Ok(exprs);
         }
-    } else {
-        Ok(ast::Expression::Variable(ident))
     }
+}
+
+/// FuncCallExpr ::= QualifiedIdent '(' ExprList ')'
+pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let ident = qualified_ident(r)?;
+
+    if !r.peek_cmp_consume(b"(") {
+        return Err(ParseError::unexpected_peek(r));
+    }
+
+    let exprs = expr_list(r)?;
+
+    if !r.peek_cmp_consume(b")") {
+        return Err(ParseError::unexpected_peek(r));
+    }
+
+    Ok(ast::Expression::FuncCall(ident, exprs))
+}
+
+/// AssignExpr ::= Ident '=' Expression
+pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let ident = identifier(r)?;
+
+    if !r.peek_cmp_consume(b"=") {
+        return Err(ParseError::unexpected_peek(r));
+    }
+
+    let expr = expression(r)?;
+
+    Ok(ast::Expression::Assignment(ident, Box::new(expr)))
+}
+
+/// UninitializedExpr ::= 'uninitialized' TypeSpec?
+pub fn uninitialized_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let ident = identifier(r)?;
+    if ident != "uninitialized" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    whitespace(r);
+
+    let point = r.tell();
+    let Ok(typ) = type_spec(r) else {
+        r.seek(point);
+        return Ok(ast::Expression::Uninitialized(None));
+    };
+
+    Ok(ast::Expression::Uninitialized(Some(typ)))
 }
 
 /// VariableExpr ::= Ident
-/// AssignExpr ::= Ident '=' Expression
-/// UninitializedExpr ::= 'uninitialized'
-/// GroupExpr ::= '(' Expression ')'
-/// Expression ::= VariableExpr | AssignExpr | UninitializedExpr | GroupExpr
-pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
-    whitespace(r);
-
-    let Some(ch) = r.peek() else {
-        return err!(r, "Unexpected EOF");
-    };
-
-    if is_alpha(ch) {
-        let ident = identifier(r)?;
-        expression_after_ident(r, ident)
-    } else if ch == b'(' {
-        r.consume(); // '('
-                     //
-        whitespace(r);
-        let expr = Box::new(expression(r)?);
-
-        whitespace(r);
-        if !r.peek_cmp_consume(b")") {
-            return err!(r, "Expected ')', got: {}", ch as char);
-        }
-
-        Ok(ast::Expression::Group(expr))
-    } else {
-        err!(r, "Unexpected character in expression: {}", ch as char)
-    }
+pub fn variable_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let ident = identifier(r)?;
+    Ok(ast::Expression::Variable(ident))
 }
 
-fn statement_after_ident(
-    r: &mut Reader,
-    ident: ast::Ident,
-) -> Result<ast::Statement> {
-    whitespace(r);
-
-    if r.peek_cmp_consume(b":=") {
-        let expr = Box::new(expression(r)?);
-        Ok(ast::Statement::VarDecl(ident, expr))
-    } else {
-        let expr = Box::new(expression_after_ident(r, ident)?);
-        Ok(ast::Statement::Expression(expr))
+/// GroupExpr ::= '(' Expression ')'
+pub fn group_expr(r: &mut Reader) -> Result<ast::Expression> {
+    if !r.peek_cmp_consume(b"(") {
+        return Err(ParseError::unexpected_peek(r));
     }
+
+    let expr = expression(r)?;
+
+    if !r.peek_cmp_consume(b")") {
+        return Err(ParseError::unexpected_peek(r));
+    }
+
+    Ok(expr)
+}
+
+/// Expression ::=
+///     FuncCallExpr |
+///     AssignExpr |
+///     UninitializedExpr |
+///     GroupExpr |
+///     VariableExpr
+pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
+    let mut comb = Combinator::new(r);
+
+    try_parse!(comb, func_call_expr);
+    try_parse!(comb, assign_expr);
+    try_parse!(comb, uninitialized_expr);
+    try_parse!(comb, group_expr);
+    try_parse!(comb, variable_expr);
+
+    Err(comb.err())
+}
+
+/// VarDeclStmt ::= Ident ':=' Expression
+fn var_decl_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let name = identifier(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b":=") {
+        return Err(ParseError::unexpected_peek(r));
+    }
+
+    let expr = expression(r)?;
+    Ok(ast::Statement::VarDecl(name, Box::new(expr)))
 }
 
 /// ExpressionStmt ::= Expression
-/// VarDeclStmt ::= Ident ':=' Expression
-/// Statement ::= ExpressionStmt | VarDeclStmt
+fn expression_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let expr = expression(r)?;
+    Ok(ast::Statement::Expression(Box::new(expr)))
+}
+
+/// Statement ::=
+///     VarDeclStmt |
+///     ExpressionStmt
 pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
-    whitespace(r);
+    let mut comb = Combinator::new(r);
 
-    let Some(ch) = r.peek() else {
-        return err!(r, "Unexpected EOF");
-    };
+    try_parse!(comb, var_decl_stmt);
+    try_parse!(comb, expression_stmt);
 
-    if is_alpha(ch) {
-        let ident = identifier(r)?;
-        statement_after_ident(r, ident)
-    } else {
-        let expr = Box::new(expression(r)?);
-        Ok(ast::Statement::Expression(expr))
-    }
+    Err(comb.err())
 }
 
 /// Block ::= Statement | (Statement ';' Block)
@@ -241,7 +362,7 @@ pub fn block(r: &mut Reader) -> Result<ast::Block> {
     let mut block = ast::Block::new();
 
     if !r.peek_cmp_consume(b"{") {
-        return err!(r, "Expected '{{', got {:?}", r.peek());
+        return Err(ParseError::unexpected_peek(r));
     }
 
     loop {
@@ -253,50 +374,89 @@ pub fn block(r: &mut Reader) -> Result<ast::Block> {
 
         block.push(statement(r)?);
         if !r.peek_cmp_consume(b";") {
-            return err!(r, "Expected ';' after statement");
+            return Err(ParseError::expected_char(r, b';'));
         }
     }
 }
 
-/// FieldDecl ::= Ident ':' TypeSpec
+/// FieldDecl ::= (Ident ':')? TypeSpec
 pub fn field_decl(r: &mut Reader) -> Result<ast::FieldDecl> {
-    let ident = identifier(r)?;
-
     whitespace(r);
+
+    let point = r.tell();
+    let ident = identifier(r)?;
+    whitespace(r);
+
     if r.peek_n(0) == Some(b':') && r.peek_n(1) != Some(b':') {
+        // If the next character is a single colon,
+        // then we parsed the name and a type spec follows
+        r.consume(); // ':'
         let typ = type_spec(r)?;
         Ok(ast::FieldDecl{name: ident, typ})
     } else {
-        let typ = type_spec_after_ident(r, ident)?;
+        // If the next character is not a single colon,
+        // the (Ident ':') part is missing, and we need to rewind
+        // and parse a type_spec and use '_' as the name
+        r.seek(point);
+        let typ = type_spec(r)?;
         Ok(ast::FieldDecl{name: "_".into(), typ})
     }
 }
 
-/// StructDecl ::= 'struct' Ident '{' FieldDecl* '}'
-fn struct_decl_after_introducer(r: &mut Reader) -> Result<ast::StructDecl> {
-    let name = identifier(r)?;
+/// FieldDecls ::= (FieldDecl ','? | FieldDecl ',' FieldDecls)?
+pub fn field_decls(r: &mut Reader) -> Result<Vec<ast::FieldDecl>> {
+    let mut decls = Vec::<ast::FieldDecl>::new();
 
-    if !r.peek_cmp_consume(b"{") {
-        return err!(r, "Expected '{{'");
-    }
-
-    let mut fields = Vec::<ast::FieldDecl>::new();
     loop {
-        whitespace(r);
-        if r.peek_cmp_consume(b"}") {
-            return Ok(ast::StructDecl{name, fields});
-        }
+        let point = r.tell();
+        let Ok(decl) = field_decl(r) else {
+            r.seek(point);
+            return Ok(decls);
+        };
 
-        fields.push(field_decl(r)?);
+        decls.push(decl);
+        whitespace(r);
+
+        if !r.peek_cmp_consume(b",") {
+            return Ok(decls);
+        }
     }
 }
 
-/// FuncSign ::= 'func' QualifiedIdent '(' FieldDecl* ')' TypeSpec
-fn func_sign_after_introducer(r: &mut Reader) -> Result<ast::FuncSign> {
+/// StructDecl ::= 'struct' Ident '{' FieldDecls '}'
+fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
+    let intro = identifier(r)?;
+    if intro != "struct" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    let name = identifier(r)?;
+
+    if !r.peek_cmp_consume(b"{") {
+        return Err(ParseError::expected_char(r, b'{'));
+    }
+
+    let fields = field_decls(r)?;
+    whitespace(r);
+
+    if !r.peek_cmp_consume(b"{") {
+        return Err(ParseError::expected_char(r, b'{'));
+    }
+
+    Ok(ast::Declaration::Struct(ast::StructDecl{name, fields}))
+}
+
+/// FuncSignature ::= 'func' QualifiedIdent '(' FieldDecls ')' TypeSpec
+fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
+    let intro = identifier(r)?;
+    if intro != "func" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
     let ident = qualified_ident(r)?;
 
     if !r.peek_cmp_consume(b"(") {
-        return err!(r, "Expected '('");
+        return Err(ParseError::expected_char(r, b'('));
     }
 
     let mut params = Vec::<ast::FieldDecl>::new();
@@ -310,44 +470,41 @@ fn func_sign_after_introducer(r: &mut Reader) -> Result<ast::FuncSign> {
     }
 
     let ret = type_spec(r)?;
-    Ok(ast::FuncSign{ident, params, ret})
+    Ok(ast::FuncSignature{ident, params, ret})
 }
 
 /// FuncDecl ::= FuncSignature Block
-fn func_decl_after_introducer(r: &mut Reader) -> Result<ast::FuncDecl> {
-    let signature = func_sign_after_introducer(r)?;
+fn func_decl(r: &mut Reader) -> Result<ast::Declaration> {
+    let signature = func_signature(r)?;
     let body = block(r)?;
-    Ok(ast::FuncDecl{signature, body})
+    Ok(ast::Declaration::Func(ast::FuncDecl{signature, body}))
 }
 
-// ExternFuncDecl ::= FuncSignature ';'
-fn extern_func_decl_after_introducer(r: &mut Reader) -> Result<ast::FuncSign> {
-    let signature = func_sign_after_introducer(r)?;
+// ExternFuncDecl ::= 'extern' FuncSignature ';'
+fn extern_func_decl(r: &mut Reader) -> Result<ast::Declaration> {
+    let intro = identifier(r)?;
+    if intro != "extern" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    let signature = func_signature(r)?;
     whitespace(r);
     if !r.peek_cmp_consume(b";") {
-        return err!(r, "Expected ';' after extern func");
+        return Err(ParseError::expected_char(r, b';'));
     }
 
-    Ok(signature)
+    Ok(ast::Declaration::ExternFunc(signature))
 }
 
-/// Declaration ::= StructDecl | FuncDecl ExternFuncDecl
+/// Declaration ::= StructDecl | FuncDecl | ExternFuncDecl
 pub fn declaration(r: &mut Reader) -> Result<ast::Declaration> {
-    let ident = identifier(r)?;
-    if ident == "struct" {
-        Ok(ast::Declaration::Struct(struct_decl_after_introducer(r)?))
-    } else if ident == "func" {
-        Ok(ast::Declaration::Func(func_decl_after_introducer(r)?))
-    } else if ident == "extern" {
-        let ident = identifier(r)?;
-        if ident == "func" {
-            Ok(ast::Declaration::ExternFunc(extern_func_decl_after_introducer(r)?))
-        } else {
-            err!(r, "Expected 'func', got: {}", ident)
-        }
-    } else {
-        err!(r, "Expected top-level 'struct' or 'func', got: {}", ident)
-    }
+    let mut comb = Combinator::new(r);
+
+    try_parse!(comb, struct_decl);
+    try_parse!(comb, func_decl);
+    try_parse!(comb, extern_func_decl);
+
+    Err(comb.err())
 }
 
 /// Program ::= Declaration*

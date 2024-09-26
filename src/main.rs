@@ -8,12 +8,12 @@ fn main() {
    
     let fname = args.next().unwrap();
     let str = fs::read_to_string(&fname).unwrap();
-    let mut reader = parser::reader::Reader::new(str.as_bytes(), fname);
+    let mut reader = parser::reader::Reader::new(str.as_bytes(), fname.clone());
 
     let prog = match parser::parse::program(&mut reader) {
         Ok(prog) => prog,
         Err(err) => {
-            eprintln!("Error at {}:{}:{}: {}", err.filename, err.line, err.col, err.msg);
+            eprintln!("Error at {}:{}:{}: {:?}", fname, err.line, err.col, err.kind);
             return;
         }
     };
