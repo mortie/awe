@@ -1,11 +1,9 @@
-#![allow(dead_code)]
-
 use std::{collections::HashMap, rc::Rc};
 
 #[derive(Debug)]
 pub struct LocalVar {
     pub typ: Rc<Type>,
-    pub frame_offset: usize,
+    pub frame_offset: isize,
 }
 
 #[derive(Debug)]
@@ -14,6 +12,7 @@ pub enum Primitive {
     Int,
     UInt,
     Float,
+    ReturnAddr,
 }
 
 #[derive(Debug)]
@@ -72,7 +71,6 @@ pub enum ExprKind {
     Assignment(Rc<LocalVar>, Box<Expression>),
     Uninitialized,
     Variable(Rc<LocalVar>),
-    Group(Box<Expression>),
 }
 
 #[derive(Debug)]

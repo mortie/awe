@@ -214,11 +214,11 @@ pub fn qualified_ident(r: &mut Reader) -> Result<ast::QualifiedIdent> {
 pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
     whitespace(r);
     let ident = qualified_ident(r)?;
-    let mut params = Vec::<ast::QualifiedIdent>::new();
+    let mut params = Vec::<ast::TypeParam>::new();
 
     if r.peek_cmp_consume(b"[") {
         loop {
-            params.push(qualified_ident(r)?);
+            params.push(ast::TypeParam::Type(Box::new(type_spec(r)?)));
 
             whitespace(r);
             let ch = r.peek();
@@ -274,6 +274,7 @@ pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
 pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = identifier(r)?;
 
+    whitespace(r);
     if !r.peek_cmp_consume(b"=") {
         return Err(ParseError::unexpected_peek(r));
     }

@@ -1,12 +1,9 @@
-#![allow(dead_code)]
-
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::parser::ast;
 use super::sst;
-
-use std::rc::Rc;
 
 #[derive(Debug)]
 pub enum AnalysisError {
@@ -17,31 +14,15 @@ pub enum AnalysisError {
     TypeConflict(Rc<sst::Type>, Rc<sst::Type>),
     InconclusiveInference,
     BadParamCount(usize, usize),
+
+    // Unimplemented is for code that's a work in progress.
+    // Most of the time, nothing which uses Unimplemented will be committed,
+    // so it should always be allowed to be unused.
+    #[allow(dead_code)]
     Unimplemented,
 }
 
 type Result<T> = std::result::Result<T, AnalysisError>;
-
-fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
-    if ident.len() == 0 {
-        eprintln!("Zero-length ident! Treating as '_'");
-        return Rc::new("_".to_owned());
-    }
-
-    if ident.len() == 1 {
-        return ident[0].clone();
-    }
-
-    let mut name = String::new();
-    for part in ident {
-        if name != "" {
-            name += "::";
-        }
-        name += part;
-    }
-
-    Rc::new(name)
-}
 
 struct Scope<'a> {
     frame: Rc<RefCell<StackFrame<'a>>>,
@@ -69,16 +50,23 @@ impl<'a> Scope<'a> {
         })
     }
 
-    fn lookup(&self, name: Rc<String>) -> Option<Rc<sst::LocalVar>> {
+    fn maybe_lookup(&self, name: Rc<String>) -> Option<Rc<sst::LocalVar>> {
         if let Some(var) = self.vars.borrow().get(&name) {
             return Some(var.clone());
         }
 
         if let Some(parent) = &self.parent {
-            return parent.lookup(name);
+            return parent.maybe_lookup(name);
         }
 
         None
+    }
+
+    fn lookup(&self, name: Rc<String>) -> Result<Rc<sst::LocalVar>> {
+        match self.maybe_lookup(name.clone()) {
+            Some(var) => Ok(var),
+            None => Err(AnalysisError::UndeclaredVariable(name)),
+        }
     }
 
     fn declare(
@@ -99,7 +87,7 @@ impl<'a> Scope<'a> {
         let size = typ.size;
         let var = Rc::new(sst::LocalVar{
             typ,
-            frame_offset: *offset,
+            frame_offset: *offset as isize,
         });
 
         *offset += size;
@@ -125,7 +113,8 @@ impl<'a> Scope<'a> {
         ident: &ast::QualifiedIdent,
     ) -> Result<Rc<sst::FuncSignature>> {
         let name = ident_to_name(ident);
-        let Some(decl) = self.frame.borrow().ctx.decls.get(&name) else {
+        let frame = self.frame.borrow();
+        let Some(decl) = frame.ctx.decls.get(&name) else {
             return Err(AnalysisError::UndeclaredFunction(name));
         };
 
@@ -138,7 +127,7 @@ impl<'a> Scope<'a> {
 }
 
 struct StackFrame<'a> {
-    ctx: &'a Context,
+    ctx: &'a mut Context,
     size: usize,
 }
 
@@ -153,9 +142,24 @@ impl<'a> StackFrame<'a> {
 
 struct Context {
     decls: HashMap<Rc<String>, sst::Declaration>,
+    underscore: Rc<String>,
+    retaddr: Rc<sst::Type>,
 }
 
 impl Context {
+    fn new() -> Self {
+        Self {
+            decls: HashMap::new(),
+            underscore: Rc::new("_".to_owned()),
+            retaddr: Rc::new(sst::Type{
+                name: Rc::new("<retaddr>".to_owned()),
+                size: 8,
+                align: 8,
+                kind: sst::TypeKind::Primitive(sst::Primitive::ReturnAddr),
+            }),
+        }
+    }
+
     fn add_primitive(&mut self, name: &str, size: usize, kind: sst::Primitive) {
         let name = Rc::new(name.to_owned());
         self.decls.insert(name.clone(), sst::Declaration::Type(Rc::new(sst::Type{
@@ -166,6 +170,27 @@ impl Context {
         })));
 
     }
+}
+
+fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
+    if ident.len() == 0 {
+        eprintln!("Zero-length ident! Treating as '_'");
+        return Rc::new("_".to_owned());
+    }
+
+    if ident.len() == 1 {
+        return ident[0].clone();
+    }
+
+    let mut name = String::new();
+    for part in ident {
+        if name != "" {
+            name += "::";
+        }
+        name += part;
+    }
+
+    Rc::new(name)
 }
 
 fn get_type(ctx: &Context, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
@@ -180,6 +205,24 @@ fn get_type(ctx: &Context, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
     };
 
     Ok(typ.clone())
+}
+
+fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
+    let name = Rc::new(format!("ptr[{}]", typ.name));
+    if let Some(decl) = &ctx.decls.get(&name) {
+        if let sst::Declaration::Type(typ) = decl {
+            return typ.clone();
+        }
+    }
+
+    let ptr = Rc::new(sst::Type{
+        name: name.clone(),
+        size: 8,
+        align: 8,
+        kind: sst::TypeKind::Pointer(typ),
+    });
+    ctx.decls.insert(name, sst::Declaration::Type(ptr.clone()));
+    ptr
 }
 
 fn analyze_field_decls(
@@ -287,8 +330,13 @@ fn analyze_expression(
             }
         }
 
-        ast::Expression::Assignment(_ident, _expr) => {
-            return Err(AnalysisError::Unimplemented)
+        ast::Expression::Assignment(ident, expr) => {
+            let var = scope.lookup(ident.clone())?;
+            let expr = analyze_expression(scope, expr, Some(var.typ.clone()))?;
+            sst::Expression{
+                typ: var.typ.clone(),
+                kind: sst::ExprKind::Assignment(var, Box::new(expr)),
+            }
         }
 
         ast::Expression::Uninitialized(maybe_type) => {
@@ -308,10 +356,7 @@ fn analyze_expression(
         }
 
         ast::Expression::Variable(name) => {
-            let Some(var) = scope.lookup(name.clone()) else {
-                return Err(AnalysisError::UndeclaredVariable(name.clone()));
-            };
-
+            let var = scope.lookup(name.clone())?;
             sst::Expression{
                 typ: var.typ.clone(),
                 kind: sst::ExprKind::Variable(var.clone()),
@@ -364,6 +409,31 @@ fn analyze_block(
     Ok(sst_stmts)
 }
 
+fn add_preamble_to_scope(
+    scope: &Scope,
+    ret: Rc<sst::Type>,
+    params: &Vec<sst::FieldDecl>,
+) -> Result<()> {
+    let mut frame = scope.frame.borrow_mut();
+    let underscore = frame.ctx.underscore.clone();
+    let retptr = make_pointer_to(frame.ctx, ret);
+    let retaddr = frame.ctx.retaddr.clone();
+    drop(frame);
+
+    // All function parameters will end up on the stack
+    for param in params {
+        scope.declare(param.name.clone(), param.typ.clone())?;
+    }
+
+    // And after that, a pointer to the return value
+    scope.declare(underscore.clone(), retptr)?;
+
+    // And after them, 
+    scope.declare(underscore, retaddr)?;
+
+    Ok(())
+}
+
 fn analyze_func_decl(
     ctx: &mut Context,
     fd: &ast::FuncDecl,
@@ -378,6 +448,21 @@ fn analyze_func_decl(
 
     let frame = StackFrame::new(ctx);
     let root = Scope::new(frame.clone());
+    add_preamble_to_scope(&root, ret.clone(), &params.fields)?;
+    let preamble_size = *root.offset.borrow();
+
+    // We want everything thus far to end up at negative relative addresses,
+    // so that the positive relative addresses are reserved for local variables
+    frame.borrow_mut().size = 0;
+    let mut vars = HashMap::<Rc<String>, Rc<sst::LocalVar>>::new();
+    for (name, var) in root.vars.borrow().iter() {
+        vars.insert(name.clone(), Rc::new(sst::LocalVar{
+            typ: var.typ.clone(),
+            frame_offset: var.frame_offset - preamble_size as isize,
+        }));
+    }
+    *root.vars.borrow_mut() = vars;
+
     let stmts = analyze_block(root, &fd.body)?;
 
     let func = Rc::new(sst::Function{
@@ -417,9 +502,7 @@ fn analyze_extern_func_decl(
 }
 
 pub fn program(prog: &ast::Program) -> Result<()> {
-    let mut ctx = Context{
-        decls: HashMap::new(),
-    };
+    let mut ctx = Context::new();
 
     ctx.add_primitive("void", 0, sst::Primitive::Void);
     ctx.add_primitive("byte", 1, sst::Primitive::UInt);
@@ -429,6 +512,8 @@ pub fn program(prog: &ast::Program) -> Result<()> {
     ctx.add_primitive("uint", 4, sst::Primitive::UInt);
     ctx.add_primitive("long", 8, sst::Primitive::Int);
     ctx.add_primitive("ulong", 8, sst::Primitive::UInt);
+    ctx.add_primitive("float", 4, sst::Primitive::Float);
+    ctx.add_primitive("double", 8, sst::Primitive::Float);
 
     for decl in prog {
         let ctx = &mut ctx;

@@ -14,7 +14,7 @@ pub enum TypeParam {
 #[derive(Debug)]
 pub struct TypeSpec {
     pub ident: QualifiedIdent,
-    pub params: Vec<QualifiedIdent>,
+    pub params: Vec<TypeParam>,
 }
 
 #[derive(Debug)]
