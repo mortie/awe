@@ -1,4 +1,5 @@
 mod parser;
+mod analyzer;
 
 use std::{env, fs};
 
@@ -18,4 +19,10 @@ fn main() {
         }
     };
     println!("Program: {:?}", prog);
+
+    println!();
+
+    if let Err(err) = analyzer::analyze::program(&prog) {
+        eprintln!("{:?}", err);
+    };
 }

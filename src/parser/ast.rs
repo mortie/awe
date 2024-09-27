@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-pub type Ident = String;
+use std::rc::Rc;
+
+pub type Ident = Rc<String>;
 
 pub type QualifiedIdent = Vec<Ident>;
 

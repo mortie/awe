@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::rc::Rc;
 
 use super::ast;
 use super::reader::{Reader, SeekPoint};
@@ -135,7 +136,7 @@ fn is_alnum(ch: u8) -> bool {
     is_alpha(ch) || (ch >= b'0' && ch <= b'9')
 }
 
-/// Comment ::= '#' [^\n]*
+/// Comment ::= '#' [^\\n]*
 fn comment(r: &mut Reader) {
     r.consume(); // '#'
     while !r.eof() && r.peek() != Some(b'\n') {
@@ -143,7 +144,7 @@ fn comment(r: &mut Reader) {
     }
 }
 
-/// Whitespace ::= ('\t' | '\n' | '\r' | ' ' | Comment)*
+/// Whitespace ::= ('\\t' | '\\n' | '\\r' | [space] | Comment)*
 pub fn whitespace(r: &mut Reader) {
     loop {
         let Some(ch) = r.peek() else {
@@ -164,7 +165,7 @@ pub fn whitespace(r: &mut Reader) {
 pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
     whitespace(r);
 
-    let mut ident = ast::Ident::new();
+    let mut ident = String::new();
 
     let Some(ch) = r.peek() else {
         return Err(ParseError::unexpected_eof(r));
@@ -182,7 +183,7 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
         };
 
         if !is_alnum(ch) {
-            return Ok(ident);
+            return Ok(Rc::new(ident));
         }
 
         ident.push(ch as char);
@@ -232,12 +233,7 @@ pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
     Ok(ast::TypeSpec{ident, params})
 }
 
-/// TypeParam ::= TypeSpec
-pub fn type_param(r: &mut Reader) -> Result<ast::TypeParam> {
-    Ok(ast::TypeParam::Type(Box::new(type_spec(r)?)))
-}
-
-/// ExprList ::= (Expression ','? | Expression ',' ExprList)?
+/// ExprList ::= (Expression ',')* (Expression ','?)?
 pub fn expr_list(r: &mut Reader) -> Result<Vec<ast::Expression>> {
     let mut exprs = Vec::<ast::Expression>::new();
 
@@ -290,7 +286,7 @@ pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
 /// UninitializedExpr ::= 'uninitialized' TypeSpec?
 pub fn uninitialized_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = identifier(r)?;
-    if ident != "uninitialized" {
+    if ident.as_str() != "uninitialized" {
         return Err(ParseError::bad_keyword(r));
     }
 
@@ -419,11 +415,11 @@ pub fn field_decl(r: &mut Reader) -> Result<ast::FieldDecl> {
         // and parse a type_spec and use '_' as the name
         r.seek(point);
         let typ = type_spec(r)?;
-        Ok(ast::FieldDecl{name: "_".into(), typ})
+        Ok(ast::FieldDecl{name: Rc::new("_".into()), typ})
     }
 }
 
-/// FieldDecls ::= (FieldDecl ','? | FieldDecl ',' FieldDecls)?
+/// FieldDecls ::= (FieldDecl ',')* (FieldDecl ','?)?
 pub fn field_decls(r: &mut Reader) -> Result<Vec<ast::FieldDecl>> {
     let mut decls = Vec::<ast::FieldDecl>::new();
 
@@ -446,11 +442,12 @@ pub fn field_decls(r: &mut Reader) -> Result<Vec<ast::FieldDecl>> {
 /// StructDecl ::= 'struct' Ident '{' FieldDecls '}'
 fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let intro = identifier(r)?;
-    if intro != "struct" {
+    if intro.as_str() != "struct" {
         return Err(ParseError::bad_keyword(r));
     }
 
     let name = identifier(r)?;
+    whitespace(r);
 
     if !r.peek_cmp_consume(b"{") {
         return Err(ParseError::expected_char(r, b'{'));
@@ -459,7 +456,7 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let fields = field_decls(r)?;
     whitespace(r);
 
-    if !r.peek_cmp_consume(b"{") {
+    if !r.peek_cmp_consume(b"}") {
         return Err(ParseError::expected_char(r, b'{'));
     }
 
@@ -469,7 +466,7 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
 /// FuncSignature ::= 'func' QualifiedIdent '(' FieldDecls ')' TypeSpec
 fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
     let intro = identifier(r)?;
-    if intro != "func" {
+    if intro.as_str() != "func" {
         return Err(ParseError::bad_keyword(r));
     }
 
@@ -479,14 +476,10 @@ fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
         return Err(ParseError::expected_char(r, b'('));
     }
 
-    let mut params = Vec::<ast::FieldDecl>::new();
-    loop {
-        whitespace(r);
-        if r.peek_cmp_consume(b")") {
-            break;
-        }
+    let params = field_decls(r)?;
 
-        params.push(field_decl(r)?);
+    if !r.peek_cmp_consume(b")") {
+        return Err(ParseError::expected_char(r, b')'));
     }
 
     let ret = type_spec(r)?;
@@ -500,10 +493,10 @@ fn func_decl(r: &mut Reader) -> Result<ast::Declaration> {
     Ok(ast::Declaration::Func(ast::FuncDecl{signature, body}))
 }
 
-// ExternFuncDecl ::= 'extern' FuncSignature ';'
+/// ExternFuncDecl ::= 'extern' FuncSignature ';'
 fn extern_func_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let intro = identifier(r)?;
-    if intro != "extern" {
+    if intro.as_str() != "extern" {
         return Err(ParseError::bad_keyword(r));
     }
 

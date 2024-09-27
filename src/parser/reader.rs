@@ -30,7 +30,7 @@ impl<'a> Reader<'a> {
 
     pub fn peek_n(&self, n: usize) -> Option<u8> {
         if self.idx + n < self.string.len() {
-            Some(self.string[self.idx])
+            Some(self.string[self.idx + n])
         } else {
             None
         }
