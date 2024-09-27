@@ -1,7 +1,8 @@
 mod parser;
 mod analyzer;
+mod backend;
 
-use std::{env, fs};
+use std::{env, fs, io};
 
 fn main() {
     let mut args = env::args();
@@ -18,11 +19,16 @@ fn main() {
             return;
         }
     };
-    println!("Program: {:?}", prog);
 
-    println!();
-
-    if let Err(err) = analyzer::analyze::program(&prog) {
-        eprintln!("{:?}", err);
+    let prog = match analyzer::analyze::program(&prog) {
+        Ok(prog) => prog,
+        Err(err) => {
+            eprintln!("{:?}", err);
+            return;
+        }
     };
+
+    if let Err(err) = backend::aarch64::codegen(&mut io::stdout(), &prog) {
+        eprintln!("{:?}", err);
+    }
 }

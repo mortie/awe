@@ -437,7 +437,7 @@ fn add_preamble_to_scope(
 fn analyze_func_decl(
     ctx: &mut Context,
     fd: &ast::FuncDecl,
-) -> Result<()> {
+) -> Result<Rc<sst::Function>> {
     let name = ident_to_name(&fd.signature.ident);
     if ctx.decls.contains_key(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
@@ -475,14 +475,14 @@ fn analyze_func_decl(
         stack_size: 0,
     });
 
-    ctx.decls.insert(name, sst::Declaration::Function(func));
-    Ok(())
+    ctx.decls.insert(name, sst::Declaration::Function(func.clone()));
+    Ok(func)
 }
 
 fn analyze_extern_func_decl(
     ctx: &mut Context,
     efd: &ast::FuncSignature,
-) -> Result<()> {
+) -> Result<Rc<sst::FuncSignature>> {
     let name = ident_to_name(&efd.ident);
     if ctx.decls.contains_key(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
@@ -497,11 +497,11 @@ fn analyze_extern_func_decl(
         ret,
     });
 
-    ctx.decls.insert(name, sst::Declaration::ExternFunc(extern_func));
-    Ok(())
+    ctx.decls.insert(name, sst::Declaration::ExternFunc(extern_func.clone()));
+    Ok(extern_func)
 }
 
-pub fn program(prog: &ast::Program) -> Result<()> {
+pub fn program(prog: &ast::Program) -> Result<sst::Program> {
     let mut ctx = Context::new();
 
     ctx.add_primitive("void", 0, sst::Primitive::Void);
@@ -515,18 +515,24 @@ pub fn program(prog: &ast::Program) -> Result<()> {
     ctx.add_primitive("float", 4, sst::Primitive::Float);
     ctx.add_primitive("double", 8, sst::Primitive::Float);
 
+    let mut functions = Vec::<Rc<sst::Function>>::new();
+    let mut extern_funcs = Vec::<Rc<sst::FuncSignature>>::new();
     for decl in prog {
         let ctx = &mut ctx;
         match decl {
-            ast::Declaration::Struct(sd) => analyze_struct_decl(ctx, sd),
-            ast::Declaration::Func(fd) => analyze_func_decl(ctx, fd),
-            ast::Declaration::ExternFunc(efd) => analyze_extern_func_decl(ctx, efd),
-        }?;
+            ast::Declaration::Struct(sd) => {
+                analyze_struct_decl(ctx, sd)?;
+            }
+
+            ast::Declaration::Func(fd) => {
+                functions.push(analyze_func_decl(ctx, fd)?);
+            }
+
+            ast::Declaration::ExternFunc(efd) => {
+                extern_funcs.push(analyze_extern_func_decl(ctx, efd)?);
+            }
+        }
     }
 
-    for (name, decl) in &ctx.decls {
-        eprintln!("::{}\n{:#?}\n", name, decl);
-    }
-
-    Ok(())
+    Ok(sst::Program{ functions, extern_funcs })
 }

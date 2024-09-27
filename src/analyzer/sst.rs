@@ -91,3 +91,9 @@ pub enum Declaration {
     Function(Rc<Function>),
     ExternFunc(Rc<FuncSignature>)
 }
+
+#[derive(Debug)]
+pub struct Program {
+    pub functions: Vec<Rc<Function>>,
+    pub extern_funcs: Vec<Rc<FuncSignature>>,
+}
