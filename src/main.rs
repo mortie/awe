@@ -13,7 +13,7 @@ fn main() {
     let prog = match parser::parse::program(&mut reader) {
         Ok(prog) => prog,
         Err(err) => {
-            eprintln!("Error at {}:{}:{}: {:?}", fname, err.line, err.col, err.kind);
+            eprintln!("{}: {}", fname, err);
             return;
         }
     };

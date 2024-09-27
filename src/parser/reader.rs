@@ -1,6 +1,8 @@
 #[derive(Copy, Clone)]
 pub struct SeekPoint {
     idx: usize,
+    line: u32,
+    col: u32,
 }
 
 pub struct Reader<'a> {
@@ -83,10 +85,16 @@ impl<'a> Reader<'a> {
     }
 
     pub fn tell(&self) -> SeekPoint {
-        SeekPoint{idx: self.idx}
+        SeekPoint{
+            idx: self.idx,
+            line: self.line,
+            col: self.col,
+        }
     }
 
     pub fn seek(&mut self, point: SeekPoint) {
         self.idx = point.idx;
+        self.line = point.line;
+        self.col = point.col;
     }
 }

@@ -1,7 +1,9 @@
+use std::fmt::Display;
+
 use super::ast;
 use super::reader::{Reader, SeekPoint};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum ErrorKind {
     UnexpectedEOF,
     UnexpectedChar(u8),
@@ -10,11 +12,29 @@ pub enum ErrorKind {
     NoMatchingParse,
 }
 
-#[derive(Debug, Clone, Copy)]
+impl Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            ErrorKind::UnexpectedEOF => write!(f, "Unexpected EOF"),
+            ErrorKind::UnexpectedChar(ch) => write!(f, "Unexpected char '{}'", ch as char),
+            ErrorKind::ExpectedChar(ch) => write!(f, "Expected '{}'", ch as char),
+            ErrorKind::BadKeyword => write!(f, "Expected a keyword"),
+            ErrorKind::NoMatchingParse => write!(f, "No matching parse"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct ParseError {
     pub line: u32,
     pub col: u32,
     pub kind: ErrorKind,
+}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}: {}", self.line, self.col, self.kind)
+    }
 }
 
 impl ParseError {
@@ -140,7 +160,7 @@ pub fn whitespace(r: &mut Reader) {
     }
 }
 
-/// Ident ::= [a-zA-Z][a-zA-Z0-9]
+/// Ident ::= [a-zA-Z_][a-zA-Z0-9_]*
 pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
     whitespace(r);
 
