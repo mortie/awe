@@ -62,7 +62,9 @@ pub struct FuncSignature {
 pub struct Function {
     pub signature: Rc<FuncSignature>,
     pub body: Vec<Statement>,
+    pub retvar: Rc<LocalVar>,
     pub stack_size: usize,
+    pub always_returns: bool,
 }
 
 #[derive(Debug)]
@@ -83,6 +85,7 @@ pub struct Expression {
 pub enum Statement {
     Expression(Box<Expression>),
     VarDecl(Rc<LocalVar>, Box<Expression>),
+    Return(Option<Box<Expression>>),
 }
 
 #[derive(Debug)]

@@ -30,6 +30,7 @@ pub enum Expression {
 pub enum Statement {
     Expression(Box<Expression>),
     VarDecl(Ident, Box<Expression>),
+    Return(Option<Box<Expression>>),
 }
 
 pub type Block = Vec<Statement>;

@@ -341,6 +341,23 @@ pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
     Err(comb.err())
 }
 
+/// ReturnStmt ::= 'return' Expression?
+fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let name = identifier(r)?;
+    if name.as_str() != "return" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    whitespace(r);
+    let point = r.tell();
+    let Ok(expr) = expression(r) else {
+        r.seek(point);
+        return Ok(ast::Statement::Return(None));
+    };
+
+    Ok(ast::Statement::Return(Some(Box::new(expr))))
+}
+
 /// VarDeclStmt ::= Ident ':=' Expression
 fn var_decl_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let name = identifier(r)?;
@@ -361,11 +378,13 @@ fn expression_stmt(r: &mut Reader) -> Result<ast::Statement> {
 }
 
 /// Statement ::=
+///     ReturnStmt |
 ///     VarDeclStmt |
 ///     ExpressionStmt
 pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
     let mut comb = Combinator::new(r);
 
+    try_parse!(comb, return_stmt);
     try_parse!(comb, var_decl_stmt);
     try_parse!(comb, expression_stmt);
 

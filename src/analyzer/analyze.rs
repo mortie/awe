@@ -24,11 +24,22 @@ pub enum AnalysisError {
 
 type Result<T> = std::result::Result<T, AnalysisError>;
 
+struct ScopeProps {
+    always_returns: bool,
+}
+
+impl ScopeProps {
+    fn new() -> Self {
+        Self { always_returns: false }
+    }
+}
+
 struct Scope<'a> {
     frame: Rc<RefCell<StackFrame<'a>>>,
     parent: Option<Rc<Scope<'a>>>,
     vars: RefCell<HashMap<Rc<String>, Rc<sst::LocalVar>>>,
     offset: RefCell<usize>,
+    props: RefCell<ScopeProps>,
 }
 
 impl<'a> Scope<'a> {
@@ -38,6 +49,7 @@ impl<'a> Scope<'a> {
             parent: None,
             vars: RefCell::new(HashMap::new()),
             offset: RefCell::new(0),
+            props: RefCell::new(ScopeProps::new()),
         })
     }
 
@@ -47,6 +59,7 @@ impl<'a> Scope<'a> {
             parent: Some(parent),
             vars: RefCell::new(HashMap::new()),
             offset: RefCell::new(0),
+            props: RefCell::new(ScopeProps::new()),
         })
     }
 
@@ -122,11 +135,12 @@ impl<'a> Scope<'a> {
 struct StackFrame<'a> {
     ctx: &'a mut Context,
     size: usize,
+    ret: Rc<sst::Type>,
 }
 
 impl<'a> StackFrame<'a> {
-    fn new(ctx: &'a mut Context) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self { ctx, size: 0 }))
+    fn new(ctx: &'a mut Context, ret: Rc<sst::Type>) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Self { ctx, size: 0, ret }))
     }
 }
 
@@ -134,10 +148,11 @@ struct Context {
     decls: HashMap<Rc<String>, sst::Declaration>,
     underscore: Rc<String>,
     retaddr: Rc<sst::Type>,
+    void: Rc<sst::Type>,
 }
 
 impl Context {
-    fn new() -> Self {
+    fn new(void: Rc<sst::Type>) -> Self {
         Self {
             decls: HashMap::new(),
             underscore: Rc::new("_".to_owned()),
@@ -147,6 +162,7 @@ impl Context {
                 align: 8,
                 kind: sst::TypeKind::Primitive(sst::Primitive::ReturnAddr),
             }),
+            void,
         }
     }
 
@@ -161,6 +177,10 @@ impl Context {
                 kind: sst::TypeKind::Primitive(kind),
             })),
         );
+    }
+
+    fn add_type(&mut self, typ: Rc<sst::Type>) {
+        self.decls.insert(typ.name.clone(), sst::Declaration::Type(typ));
     }
 }
 
@@ -199,6 +219,8 @@ fn get_type(ctx: &Context, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
     Ok(typ.clone())
 }
 
+// TODO: support pointers
+#[allow(dead_code)]
 fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
     let name = Rc::new(format!("ptr[{}]", typ.name));
     if let Some(decl) = &ctx.decls.get(&name) {
@@ -375,14 +397,34 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
             Ok(sst::Statement::VarDecl(var, sst_expr))
         }
+
+        ast::Statement::Return(expr) => {
+            let void = scope.frame.borrow().ctx.void.clone();
+            let ret = scope.frame.borrow().ret.clone();
+            let sst_expr = match expr {
+                Some(expr) => Some(Box::new(analyze_expression(
+                    scope.clone(), expr, Some(ret.clone()))?)),
+                None => None,
+            };
+
+            if sst_expr.is_none() && !Rc::ptr_eq(&ret, &void) {
+                return Err(AnalysisError::TypeConflict(ret, void));
+            }
+
+            scope.props.borrow_mut().always_returns = true;
+            Ok(sst::Statement::Return(sst_expr))
+        }
     }
 }
 
-fn analyze_block(parent: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statement>> {
-    let scope = Scope::from_parent(parent);
-
+fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statement>> {
     let mut sst_stmts = Vec::<sst::Statement>::new();
     for stmt in block {
+        // Eliminate obviously dead code
+        if scope.props.borrow().always_returns {
+            return Ok(sst_stmts);
+        }
+
         sst_stmts.push(analyze_statement(scope.clone(), stmt)?);
     }
 
@@ -393,25 +435,24 @@ fn add_preamble_to_scope(
     scope: &Scope,
     ret: Rc<sst::Type>,
     params: &Vec<sst::FieldDecl>,
-) -> Result<()> {
-    let mut frame = scope.frame.borrow_mut();
+) -> Result<Rc<sst::LocalVar>> {
+    let frame = scope.frame.borrow();
     let underscore = frame.ctx.underscore.clone();
-    let retptr = make_pointer_to(frame.ctx, ret);
     let retaddr = frame.ctx.retaddr.clone();
     drop(frame);
 
-    // All function parameters will end up on the stack
+    // First put the return value on the stack
+    let retval = scope.declare(underscore.clone(), ret)?;
+
+    // Then, all function parameters, in forward order
     for param in params {
         scope.declare(param.name.clone(), param.typ.clone())?;
     }
 
-    // And after that, a pointer to the return value
-    scope.declare(underscore.clone(), retptr)?;
-
     // And after that, the return address
     scope.declare(underscore, retaddr)?;
 
-    Ok(())
+    Ok(retval)
 }
 
 fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
@@ -423,16 +464,16 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     let params = analyze_field_decls(&ctx, &fd.signature.params)?;
     let ret = get_type(&ctx, &fd.signature.ret)?;
 
-    let frame = StackFrame::new(ctx);
-    let root = Scope::new(frame.clone());
-    add_preamble_to_scope(&root, ret.clone(), &params.fields)?;
-    let preamble_size = *root.offset.borrow();
+    let frame = StackFrame::new(ctx, ret.clone());
+    let root_scope = Scope::new(frame.clone());
+    let retvar = add_preamble_to_scope(&root_scope, ret.clone(), &params.fields)?;
+    let preamble_size = *root_scope.offset.borrow();
 
     // We want everything thus far to end up at negative relative addresses,
     // so that the positive relative addresses are reserved for local variables
     frame.borrow_mut().size = 0;
     let mut vars = HashMap::<Rc<String>, Rc<sst::LocalVar>>::new();
-    for (name, var) in root.vars.borrow().iter() {
+    for (name, var) in root_scope.vars.borrow().iter() {
         vars.insert(
             name.clone(),
             Rc::new(sst::LocalVar {
@@ -441,19 +482,28 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
             }),
         );
     }
-    *root.vars.borrow_mut() = vars;
+    *root_scope.vars.borrow_mut() = vars;
+    let retvar = Rc::new(sst::LocalVar {
+        typ: retvar.typ.clone(),
+        frame_offset: retvar.frame_offset - preamble_size as isize,
+    });
 
-    let stmts = analyze_block(root, &fd.body)?;
+    let body_scope = Scope::from_parent(root_scope);
+    let stmts = analyze_block(body_scope.clone(), &fd.body)?;
 
+    let props = body_scope.props.borrow();
     let func = Rc::new(sst::Function {
         signature: Rc::new(sst::FuncSignature {
             name: name.clone(),
             params,
             ret,
         }),
+        retvar,
         body: stmts,
-        stack_size: 0,
+        stack_size: frame.borrow().size,
+        always_returns: props.always_returns,
     });
+    drop(props);
 
     ctx.decls
         .insert(name, sst::Declaration::Function(func.clone()));
@@ -484,9 +534,16 @@ fn analyze_extern_func_decl(
 }
 
 pub fn program(prog: &ast::Program) -> Result<sst::Program> {
-    let mut ctx = Context::new();
+    let void = Rc::new(sst::Type{
+        name: Rc::new("void".into()),
+        size: 0,
+        align: 0,
+        kind: sst::TypeKind::Primitive(sst::Primitive::Void),
+    });
 
-    ctx.add_primitive("void", 0, sst::Primitive::Void);
+    let mut ctx = Context::new(void.clone());
+
+    ctx.add_type(void);
     ctx.add_primitive("byte", 1, sst::Primitive::UInt);
     ctx.add_primitive("short", 2, sst::Primitive::Int);
     ctx.add_primitive("ushort", 2, sst::Primitive::UInt);
