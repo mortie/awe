@@ -89,7 +89,7 @@ pub enum Statement {
 pub enum Declaration {
     Type(Rc<Type>),
     Function(Rc<Function>),
-    ExternFunc(Rc<FuncSignature>)
+    ExternFunc(Rc<FuncSignature>),
 }
 
 #[derive(Debug)]

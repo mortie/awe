@@ -1,5 +1,5 @@
-use std::io::Write;
 use std::io::Result;
+use std::io::Write;
 
 use super::common;
 use crate::analyzer::sst;

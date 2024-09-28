@@ -85,7 +85,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn tell(&self) -> SeekPoint {
-        SeekPoint{
+        SeekPoint {
             idx: self.idx,
             line: self.line,
             col: self.col,

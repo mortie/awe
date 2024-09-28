@@ -8,7 +8,7 @@ pub type QualifiedIdent = Vec<Ident>;
 
 #[derive(Debug)]
 pub enum TypeParam {
-    Type(Box<TypeSpec>)
+    Type(Box<TypeSpec>),
 }
 
 #[derive(Debug)]

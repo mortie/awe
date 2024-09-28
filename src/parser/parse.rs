@@ -125,7 +125,7 @@ macro_rules! try_parse {
             Ok(ok) => return Ok(ok),
             Err(err) => $c.consider_error(err),
         };
-    }
+    };
 }
 
 fn is_alpha(ch: u8) -> bool {
@@ -188,7 +188,7 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
 
         ident.push(ch as char);
         r.consume();
-    };
+    }
 }
 
 /// QualifiedIdent ::= Ident | Ident '::' QualifiedIdent
@@ -230,7 +230,7 @@ pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
         }
     }
 
-    Ok(ast::TypeSpec{ident, params})
+    Ok(ast::TypeSpec { ident, params })
 }
 
 /// ExprList ::= (Expression ',')* (Expression ','?)?
@@ -409,14 +409,17 @@ pub fn field_decl(r: &mut Reader) -> Result<ast::FieldDecl> {
         // then we parsed the name and a type spec follows
         r.consume(); // ':'
         let typ = type_spec(r)?;
-        Ok(ast::FieldDecl{name: ident, typ})
+        Ok(ast::FieldDecl { name: ident, typ })
     } else {
         // If the next character is not a single colon,
         // the (Ident ':') part is missing, and we need to rewind
         // and parse a type_spec and use '_' as the name
         r.seek(point);
         let typ = type_spec(r)?;
-        Ok(ast::FieldDecl{name: Rc::new("_".into()), typ})
+        Ok(ast::FieldDecl {
+            name: Rc::new("_".into()),
+            typ,
+        })
     }
 }
 
@@ -461,7 +464,7 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
         return Err(ParseError::expected_char(r, b'{'));
     }
 
-    Ok(ast::Declaration::Struct(ast::StructDecl{name, fields}))
+    Ok(ast::Declaration::Struct(ast::StructDecl { name, fields }))
 }
 
 /// FuncSignature ::= 'func' QualifiedIdent '(' FieldDecls ')' TypeSpec
@@ -484,14 +487,14 @@ fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
     }
 
     let ret = type_spec(r)?;
-    Ok(ast::FuncSignature{ident, params, ret})
+    Ok(ast::FuncSignature { ident, params, ret })
 }
 
 /// FuncDecl ::= FuncSignature Block
 fn func_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let signature = func_signature(r)?;
     let body = block(r)?;
-    Ok(ast::Declaration::Func(ast::FuncDecl{signature, body}))
+    Ok(ast::Declaration::Func(ast::FuncDecl { signature, body }))
 }
 
 /// ExternFuncDecl ::= 'extern' FuncSignature ';'

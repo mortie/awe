@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::parser::ast;
 use super::sst;
+use crate::parser::ast;
 
 #[derive(Debug)]
 pub enum AnalysisError {
@@ -69,11 +69,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn declare(
-        &self,
-        name: Rc<String>,
-        typ: Rc<sst::Type>,
-    ) -> Result<Rc<sst::LocalVar>> {
+    fn declare(&self, name: Rc<String>, typ: Rc<sst::Type>) -> Result<Rc<sst::LocalVar>> {
         let mut vars = self.vars.borrow_mut();
         if vars.contains_key(&name) {
             return Err(AnalysisError::MultipleDefinitions(name));
@@ -85,7 +81,7 @@ impl<'a> Scope<'a> {
         }
 
         let size = typ.size;
-        let var = Rc::new(sst::LocalVar{
+        let var = Rc::new(sst::LocalVar {
             typ,
             frame_offset: *offset as isize,
         });
@@ -108,10 +104,7 @@ impl<'a> Scope<'a> {
         get_type(self.frame.borrow().ctx, spec)
     }
 
-    fn get_func_sig(
-        &self,
-        ident: &ast::QualifiedIdent,
-    ) -> Result<Rc<sst::FuncSignature>> {
+    fn get_func_sig(&self, ident: &ast::QualifiedIdent) -> Result<Rc<sst::FuncSignature>> {
         let name = ident_to_name(ident);
         let frame = self.frame.borrow();
         let Some(decl) = frame.ctx.decls.get(&name) else {
@@ -121,7 +114,7 @@ impl<'a> Scope<'a> {
         match decl {
             sst::Declaration::Function(func) => Ok(func.signature.clone()),
             sst::Declaration::ExternFunc(sig) => Ok(sig.clone()),
-            _ => Err(AnalysisError::UndeclaredFunction(name))
+            _ => Err(AnalysisError::UndeclaredFunction(name)),
         }
     }
 }
@@ -133,10 +126,7 @@ struct StackFrame<'a> {
 
 impl<'a> StackFrame<'a> {
     fn new(ctx: &'a mut Context) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
-            ctx,
-            size: 0,
-        }))
+        Rc::new(RefCell::new(Self { ctx, size: 0 }))
     }
 }
 
@@ -151,7 +141,7 @@ impl Context {
         Self {
             decls: HashMap::new(),
             underscore: Rc::new("_".to_owned()),
-            retaddr: Rc::new(sst::Type{
+            retaddr: Rc::new(sst::Type {
                 name: Rc::new("<retaddr>".to_owned()),
                 size: 8,
                 align: 8,
@@ -162,13 +152,15 @@ impl Context {
 
     fn add_primitive(&mut self, name: &str, size: usize, kind: sst::Primitive) {
         let name = Rc::new(name.to_owned());
-        self.decls.insert(name.clone(), sst::Declaration::Type(Rc::new(sst::Type{
-            name,
-            size,
-            align: size,
-            kind: sst::TypeKind::Primitive(kind),
-        })));
-
+        self.decls.insert(
+            name.clone(),
+            sst::Declaration::Type(Rc::new(sst::Type {
+                name,
+                size,
+                align: size,
+                kind: sst::TypeKind::Primitive(kind),
+            })),
+        );
     }
 }
 
@@ -215,7 +207,7 @@ fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
         }
     }
 
-    let ptr = Rc::new(sst::Type{
+    let ptr = Rc::new(sst::Type {
         name: name.clone(),
         size: 8,
         align: 8,
@@ -225,10 +217,7 @@ fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
     ptr
 }
 
-fn analyze_field_decls(
-    ctx: &Context,
-    field_decls: &[ast::FieldDecl],
-) -> Result<sst::FieldDecls> {
+fn analyze_field_decls(ctx: &Context, field_decls: &[ast::FieldDecl]) -> Result<sst::FieldDecls> {
     let mut names = HashSet::<Rc<String>>::new();
     let mut fields = Vec::<sst::FieldDecl>::new();
     let mut offset: usize = 0;
@@ -252,7 +241,7 @@ fn analyze_field_decls(
 
         let size = typ.size;
         names.insert(fname.clone());
-        fields.push(sst::FieldDecl{
+        fields.push(sst::FieldDecl {
             name: fname,
             typ,
             offset,
@@ -264,17 +253,14 @@ fn analyze_field_decls(
         offset += 1;
     }
 
-    Ok(sst::FieldDecls{
+    Ok(sst::FieldDecls {
         fields,
         size: offset,
         align: biggest_align,
     })
 }
 
-fn analyze_struct_decl(
-    ctx: &mut Context,
-    sd: &ast::StructDecl,
-) -> Result<()> {
+fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
     let name = sd.name.clone();
     if ctx.decls.contains_key(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
@@ -287,11 +273,11 @@ fn analyze_struct_decl(
         fields.insert(field.name.clone(), field);
     }
 
-    let typ = Rc::new(sst::Type{
+    let typ = Rc::new(sst::Type {
         name: name.clone(),
         size: info.size,
         align: info.align,
-        kind: sst::TypeKind::Struct(Rc::new(sst::Struct{
+        kind: sst::TypeKind::Struct(Rc::new(sst::Struct {
             name: name.clone(),
             fields,
             methods: HashMap::new(),
@@ -320,11 +306,13 @@ fn analyze_expression(
             exprs.reserve(len);
             for i in 0..len {
                 exprs.push(analyze_expression(
-                    scope.clone(), &params[i],
-                    Some(sig.params.fields[i].typ.clone()))?);
+                    scope.clone(),
+                    &params[i],
+                    Some(sig.params.fields[i].typ.clone()),
+                )?);
             }
 
-            sst::Expression{
+            sst::Expression {
                 typ: sig.ret.clone(),
                 kind: sst::ExprKind::FuncCall(sig, exprs),
             }
@@ -333,7 +321,7 @@ fn analyze_expression(
         ast::Expression::Assignment(ident, expr) => {
             let var = scope.lookup(ident.clone())?;
             let expr = analyze_expression(scope, expr, Some(var.typ.clone()))?;
-            sst::Expression{
+            sst::Expression {
                 typ: var.typ.clone(),
                 kind: sst::ExprKind::Assignment(var, Box::new(expr)),
             }
@@ -341,31 +329,29 @@ fn analyze_expression(
 
         ast::Expression::Uninitialized(maybe_type) => {
             if let Some(typ) = maybe_type {
-                sst::Expression{
+                sst::Expression {
                     typ: scope.get_type(typ)?,
                     kind: sst::ExprKind::Uninitialized,
                 }
             } else if let Some(inferred) = &inferred {
-                sst::Expression{
+                sst::Expression {
                     typ: inferred.clone(),
                     kind: sst::ExprKind::Uninitialized,
                 }
             } else {
-                return Err(AnalysisError::InconclusiveInference)
+                return Err(AnalysisError::InconclusiveInference);
             }
         }
 
         ast::Expression::Variable(name) => {
             let var = scope.lookup(name.clone())?;
-            sst::Expression{
+            sst::Expression {
                 typ: var.typ.clone(),
                 kind: sst::ExprKind::Variable(var.clone()),
             }
         }
 
-        ast::Expression::Group(expr) => {
-            analyze_expression(scope, expr, inferred.clone())?
-        }
+        ast::Expression::Group(expr) => analyze_expression(scope, expr, inferred.clone())?,
     };
 
     if let Some(inferred) = &inferred {
@@ -377,10 +363,7 @@ fn analyze_expression(
     Ok(expr)
 }
 
-fn analyze_statement(
-    scope: Rc<Scope>,
-    stmt: &ast::Statement,
-) -> Result<sst::Statement> {
+fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
     match stmt {
         ast::Statement::Expression(expr) => {
             let sst_expr = analyze_expression(scope, expr, None)?;
@@ -395,10 +378,7 @@ fn analyze_statement(
     }
 }
 
-fn analyze_block(
-    parent: Rc<Scope>,
-    block: &ast::Block,
-) -> Result<Vec<sst::Statement>> {
+fn analyze_block(parent: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statement>> {
     let scope = Scope::from_parent(parent);
 
     let mut sst_stmts = Vec::<sst::Statement>::new();
@@ -434,10 +414,7 @@ fn add_preamble_to_scope(
     Ok(())
 }
 
-fn analyze_func_decl(
-    ctx: &mut Context,
-    fd: &ast::FuncDecl,
-) -> Result<Rc<sst::Function>> {
+fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
     let name = ident_to_name(&fd.signature.ident);
     if ctx.decls.contains_key(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
@@ -456,17 +433,20 @@ fn analyze_func_decl(
     frame.borrow_mut().size = 0;
     let mut vars = HashMap::<Rc<String>, Rc<sst::LocalVar>>::new();
     for (name, var) in root.vars.borrow().iter() {
-        vars.insert(name.clone(), Rc::new(sst::LocalVar{
-            typ: var.typ.clone(),
-            frame_offset: var.frame_offset - preamble_size as isize,
-        }));
+        vars.insert(
+            name.clone(),
+            Rc::new(sst::LocalVar {
+                typ: var.typ.clone(),
+                frame_offset: var.frame_offset - preamble_size as isize,
+            }),
+        );
     }
     *root.vars.borrow_mut() = vars;
 
     let stmts = analyze_block(root, &fd.body)?;
 
-    let func = Rc::new(sst::Function{
-        signature: Rc::new(sst::FuncSignature{
+    let func = Rc::new(sst::Function {
+        signature: Rc::new(sst::FuncSignature {
             name: name.clone(),
             params,
             ret,
@@ -475,7 +455,8 @@ fn analyze_func_decl(
         stack_size: 0,
     });
 
-    ctx.decls.insert(name, sst::Declaration::Function(func.clone()));
+    ctx.decls
+        .insert(name, sst::Declaration::Function(func.clone()));
     Ok(func)
 }
 
@@ -491,13 +472,14 @@ fn analyze_extern_func_decl(
     let params = analyze_field_decls(&ctx, &efd.params)?;
     let ret = get_type(&ctx, &efd.ret)?;
 
-    let extern_func = Rc::new(sst::FuncSignature{
+    let extern_func = Rc::new(sst::FuncSignature {
         name: name.clone(),
         params,
         ret,
     });
 
-    ctx.decls.insert(name, sst::Declaration::ExternFunc(extern_func.clone()));
+    ctx.decls
+        .insert(name, sst::Declaration::ExternFunc(extern_func.clone()));
     Ok(extern_func)
 }
 
@@ -534,5 +516,8 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         }
     }
 
-    Ok(sst::Program{ functions, extern_funcs })
+    Ok(sst::Program {
+        functions,
+        extern_funcs,
+    })
 }
