@@ -428,7 +428,7 @@ fn add_preamble_to_scope(
     // And after that, a pointer to the return value
     scope.declare(underscore.clone(), retptr)?;
 
-    // And after them, 
+    // And after that, the return address
     scope.declare(underscore, retaddr)?;
 
     Ok(())
