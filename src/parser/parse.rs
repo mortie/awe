@@ -507,6 +507,17 @@ fn type_alias_stmt(r: &mut Reader) -> Result<ast::Statement> {
     Ok(ast::Statement::TypeAlias(ident, spec))
 }
 
+/// DebugPrintStmt ::= 'debug' Expression
+fn debug_print_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "debug" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    let expr = expression(r)?;
+    Ok(ast::Statement::DebugPrint(Box::new(expr)))
+}
+
 /// VarDeclStmt ::= Ident ':=' Expression
 fn var_decl_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let name = identifier(r)?;
@@ -529,6 +540,7 @@ fn expression_stmt(r: &mut Reader) -> Result<ast::Statement> {
 /// Statement ::=
 ///     ReturnStmt |
 ///     TypeAliasStmt |
+///     DebugPrintStmt |
 ///     VarDeclStmt |
 ///     ExpressionStmt
 pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
@@ -536,6 +548,7 @@ pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
 
     try_parse!(comb, return_stmt);
     try_parse!(comb, type_alias_stmt);
+    try_parse!(comb, debug_print_stmt);
     try_parse!(comb, var_decl_stmt);
     try_parse!(comb, expression_stmt);
 

@@ -53,6 +53,7 @@ pub enum Expression {
 pub enum Statement {
     Return(Option<Box<Expression>>),
     TypeAlias(Ident, TypeSpec),
+    DebugPrint(Box<Expression>),
     VarDecl(Ident, Box<Expression>),
     Expression(Box<Expression>),
 }

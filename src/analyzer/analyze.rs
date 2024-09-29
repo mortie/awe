@@ -541,6 +541,12 @@ fn analyze_statement(
             Ok(None)
         }
 
+        ast::Statement::DebugPrint(expr) => {
+            let sst_expr = analyze_expression(scope, expr, None)?;
+            eprintln!("DEBUG: Expression has type '{}'", sst_expr.typ.name);
+            Ok(None)
+        }
+
         ast::Statement::VarDecl(ident, expr) => {
             let sst_expr = Box::new(analyze_expression(scope.clone(), expr, None)?);
             let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
