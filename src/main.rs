@@ -2,7 +2,26 @@ mod analyzer;
 mod backend;
 mod parser;
 
-use std::{env, fs, io};
+use std::env;
+use std::error::Error;
+use std::fs;
+use std::io::{self, Write};
+
+fn codegen<W: Write>(
+    w: &mut W,
+    prog: &analyzer::sst::Program,
+) -> Result<(), Box<dyn Error>> {
+    write!(w, "// <PRELUDE>\n")?;
+    write!(w, "{}", backend::preludes::AARCH64_DARWIN)?;
+    write!(w, "// <PRELUDE>\n")?;
+    write!(w, "\n")?;
+
+    if let Err(err) = backend::aarch64::codegen(&mut io::stdout(), prog) {
+        eprintln!("{:?}", err);
+    }
+
+    Ok(())
+}
 
 fn main() {
     let mut args = env::args();
@@ -28,7 +47,8 @@ fn main() {
         }
     };
 
-    if let Err(err) = backend::aarch64::codegen(&mut io::stdout(), &prog) {
-        eprintln!("{:?}", err);
+    match codegen(&mut io::stdout(), &prog) {
+        Ok(_) => (),
+        Err(err) => eprintln!("{}", err),
     }
 }

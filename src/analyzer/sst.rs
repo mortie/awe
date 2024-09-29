@@ -91,9 +91,9 @@ pub struct Expression {
 
 #[derive(Debug)]
 pub enum Statement {
-    Expression(Box<Expression>),
-    VarDecl(Rc<LocalVar>, Box<Expression>),
     Return(Option<Box<Expression>>),
+    VarDecl(Rc<LocalVar>, Box<Expression>),
+    Expression(Box<Expression>),
 }
 
 #[derive(Debug)]
@@ -106,5 +106,4 @@ pub enum Declaration {
 #[derive(Debug)]
 pub struct Program {
     pub functions: Vec<Rc<Function>>,
-    pub extern_funcs: Vec<Rc<FuncSignature>>,
 }

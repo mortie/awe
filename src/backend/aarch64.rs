@@ -8,7 +8,7 @@ use crate::analyzer::sst;
  * Registers:
  * lr (x30): Link register
  * sp: Stack pointer
- * x1/w1: Scratch register
+ * x0-x3, w0-w3: Scratch register
  *
  * The stack pointer will always point to the byte before the return value.
  * On function call, the stack pointer should be decremented as necessary
@@ -129,17 +129,17 @@ fn gen_integer<W: Write>(
     let doffset = frame_offset(dest);
 
     if size == 1 {
-        write!(&mut frame.w, "\tmov w1, #{}\n", num)?;
-        write!(&mut frame.w, "\tstrb w1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
+        write!(&mut frame.w, "\tstrb w0, [sp, {}]\n", doffset)?;
     } else if size == 2 {
-        write!(&mut frame.w, "\tmov w1, #{}\n", num)?;
-        write!(&mut frame.w, "\tstrh w1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
+        write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
     } else if size == 4 {
-        write!(&mut frame.w, "\tmov w1, #{}\n", num)?;
-        write!(&mut frame.w, "\tstrh w1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
+        write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
     } else if size == 8 {
-        write!(&mut frame.w, "\tmov x1, #{}\n", num)?;
-        write!(&mut frame.w, "\tstrh x1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tmov x0, {}\n", num)?;
+        write!(&mut frame.w, "\tstrh x0, [sp, {}]\n", doffset)?;
     } else {
         panic!("Unsupported copy size: {}", size);
     }
@@ -164,17 +164,17 @@ fn gen_copy<W: Write>(
     }
 
     if size == 1 {
-        write!(&mut frame.w, "\tldrb w1, [sp, #{}]\n", soffset)?;
-        write!(&mut frame.w, "\tstrb w1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tldrb w0, [sp, {}]\n", soffset)?;
+        write!(&mut frame.w, "\tstrb w0, [sp, {}]\n", doffset)?;
     } else if size == 2 {
-        write!(&mut frame.w, "\tldrh w1, [sp, #{}]\n", soffset)?;
-        write!(&mut frame.w, "\tstrh w1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tldrh w0, [sp, {}]\n", soffset)?;
+        write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
     } else if size == 4 {
-        write!(&mut frame.w, "\tldr w1, [sp, #{}]\n", soffset)?;
-        write!(&mut frame.w, "\tstr w1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tldr w0, [sp, {}]\n", soffset)?;
+        write!(&mut frame.w, "\tstr w0, [sp, {}]\n", doffset)?;
     } else if size == 8 {
-        write!(&mut frame.w, "\tldr x1, [sp, #{}]\n", soffset)?;
-        write!(&mut frame.w, "\tstr x1, [sp, #{}]\n", doffset)?;
+        write!(&mut frame.w, "\tldr x0, [sp, {}]\n", soffset)?;
+        write!(&mut frame.w, "\tstr x0, [sp, {}]\n", doffset)?;
     } else {
         panic!("Unsupported copy size: {}", size);
     }
@@ -212,9 +212,9 @@ fn gen_expr_to<W: Write>(
                 param_vars.push(var);
             }
 
-            write!(&mut frame.w, "\tsub sp, sp, #{}\n", aligned.frame_offset)?;
+            write!(&mut frame.w, "\tsub sp, sp, {}\n", aligned.frame_offset)?;
             write!(&mut frame.w, "\tbl awe__{}\n", signature.name)?;
-            write!(&mut frame.w, "\tadd sp, sp, #{}\n", aligned.frame_offset)?;
+            write!(&mut frame.w, "\tadd sp, sp, {}\n", aligned.frame_offset)?;
 
             while let Some(var) = param_vars.pop() {
                 frame.pop_temp(var);
@@ -235,7 +235,6 @@ fn gen_expr_to<W: Write>(
 
         sst::ExprKind::Uninitialized => {
             write!(&mut frame.w, "\t// <Expression::Uninitialized />\n")?;
-            // Nothing to do here
         }
 
         sst::ExprKind::Variable(var) => {
@@ -245,15 +244,6 @@ fn gen_expr_to<W: Write>(
         }
     }
 
-    Ok(())
-}
-
-fn gen_extern_func<W: Write>(
-    w: &mut W,
-    func: &sst::FuncSignature,
-) -> Result<()> {
-    common::gen_signature_comment(w, func)?;
-    write!(w, ".extern {}\n\n", func.name)?;
     Ok(())
 }
 
@@ -268,20 +258,6 @@ fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
 
 fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()> {
     match stmt {
-        sst::Statement::Expression(expr) => {
-            write!(&mut frame.w, "\t// <Statement::Expression>\n")?;
-            let local = frame.push_temp(expr.typ.clone());
-            gen_expr_to(frame, expr, &local)?;
-            frame.pop_temp(local);
-            write!(&mut frame.w, "\t// </Statement::Expression>\n")?;
-        }
-
-        sst::Statement::VarDecl(var, expr) => {
-            write!(&mut frame.w, "\t// <Statement::VarDecl>\n")?;
-            gen_expr_to(frame, expr, &var)?;
-            write!(&mut frame.w, "\t// </Statement::VarDecl>\n")?;
-        }
-
         sst::Statement::Return(expr) => {
             write!(&mut frame.w, "\t// <Statement::Return>\n")?;
             if let Some(expr) = expr {
@@ -290,6 +266,20 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             }
             gen_return(frame)?;
             write!(&mut frame.w, "\t// </Statement::Return>\n")?;
+        }
+
+        sst::Statement::VarDecl(var, expr) => {
+            write!(&mut frame.w, "\t// <Statement::VarDecl>\n")?;
+            gen_expr_to(frame, expr, &var)?;
+            write!(&mut frame.w, "\t// </Statement::VarDecl>\n")?;
+        }
+
+        sst::Statement::Expression(expr) => {
+            write!(&mut frame.w, "\t// <Statement::Expression>\n")?;
+            let local = frame.push_temp(expr.typ.clone());
+            gen_expr_to(frame, expr, &local)?;
+            frame.pop_temp(local);
+            write!(&mut frame.w, "\t// </Statement::Expression>\n")?;
         }
     }
 
@@ -326,10 +316,6 @@ fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
 }
 
 pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
-    for func in &prog.extern_funcs {
-        gen_extern_func(&mut w, func)?;
-    }
-
     let sentinel = Rc::new(sst::Type{
         name: Rc::new("<sentinel>".to_owned()),
         size: 0,
@@ -347,7 +333,7 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
     write!(w, "_main:\n")?;
     write!(w, "\tbl awe__main\n")?;
     write!(w, "\tmov x0, 0\n")?; // Exit code
-    write!(w, "\tldr w0, [sp, #-4]\n")?; // Exit code
+    write!(w, "\tldr w0, [sp, -4]\n")?; // Exit code
     write!(w, "\tmov x16, 1\n")?; // Terminate svc
     write!(w, "\tsvc 0\n")?;
 

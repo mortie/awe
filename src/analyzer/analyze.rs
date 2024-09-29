@@ -465,17 +465,6 @@ fn analyze_expression(
 
 fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
     match stmt {
-        ast::Statement::Expression(expr) => {
-            let sst_expr = analyze_expression(scope, expr, None)?;
-            Ok(sst::Statement::Expression(Box::new(sst_expr)))
-        }
-
-        ast::Statement::VarDecl(ident, expr) => {
-            let sst_expr = Box::new(analyze_expression(scope.clone(), expr, None)?);
-            let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
-            Ok(sst::Statement::VarDecl(var, sst_expr))
-        }
-
         ast::Statement::Return(expr) => {
             let void = scope.frame.borrow().ctx.types.void.clone();
             let ret = scope.frame.borrow().ret.clone();
@@ -491,6 +480,17 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
 
             scope.props.borrow_mut().always_returns = true;
             Ok(sst::Statement::Return(sst_expr))
+        }
+
+        ast::Statement::VarDecl(ident, expr) => {
+            let sst_expr = Box::new(analyze_expression(scope.clone(), expr, None)?);
+            let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
+            Ok(sst::Statement::VarDecl(var, sst_expr))
+        }
+
+        ast::Statement::Expression(expr) => {
+            let sst_expr = analyze_expression(scope, expr, None)?;
+            Ok(sst::Statement::Expression(Box::new(sst_expr)))
         }
     }
 }
@@ -608,7 +608,6 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
     let mut ctx = Context::new(types);
 
     let mut functions = Vec::<Rc<sst::Function>>::new();
-    let mut extern_funcs = Vec::<Rc<sst::FuncSignature>>::new();
     for decl in prog {
         let ctx = &mut ctx;
         match decl {
@@ -621,13 +620,12 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
             }
 
             ast::Declaration::ExternFunc(efd) => {
-                extern_funcs.push(analyze_extern_func_decl(ctx, efd)?);
+                analyze_extern_func_decl(ctx, efd)?;
             }
         }
     }
 
     Ok(sst::Program {
         functions,
-        extern_funcs,
     })
 }
