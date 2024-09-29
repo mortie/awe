@@ -415,8 +415,8 @@ pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
 
 /// UninitializedExpr ::= 'uninitialized' TypeSpec?
 pub fn uninitialized_expr(r: &mut Reader) -> Result<ast::Expression> {
-    let ident = identifier(r)?;
-    if ident.as_str() != "uninitialized" {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "uninitialized" {
         return Err(ParseError::bad_keyword(r));
     }
 
@@ -474,8 +474,8 @@ pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
 
 /// ReturnStmt ::= 'return' Expression?
 fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
-    let name = identifier(r)?;
-    if name.as_str() != "return" {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "return" {
         return Err(ParseError::bad_keyword(r));
     }
 
@@ -487,6 +487,24 @@ fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
     };
 
     Ok(ast::Statement::Return(Some(Box::new(expr))))
+}
+
+/// TypeAliasStmt ::= 'type' Ident '=' Expression
+fn type_alias_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "type" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    let ident = identifier(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b"=") {
+        return Err(ParseError::expected_char(r, b'='));
+    }
+
+    let spec = type_spec(r)?;
+    Ok(ast::Statement::TypeAlias(ident, spec))
 }
 
 /// VarDeclStmt ::= Ident ':=' Expression
@@ -510,12 +528,14 @@ fn expression_stmt(r: &mut Reader) -> Result<ast::Statement> {
 
 /// Statement ::=
 ///     ReturnStmt |
+///     TypeAliasStmt |
 ///     VarDeclStmt |
 ///     ExpressionStmt
 pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
     let mut comb = Combinator::new(r);
 
     try_parse!(comb, return_stmt);
+    try_parse!(comb, type_alias_stmt);
     try_parse!(comb, var_decl_stmt);
     try_parse!(comb, expression_stmt);
 
@@ -595,8 +615,8 @@ pub fn field_decls(r: &mut Reader) -> Result<Vec<ast::FieldDecl>> {
 
 /// StructDecl ::= 'struct' Ident '{' FieldDecls '}'
 fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
-    let intro = identifier(r)?;
-    if intro.as_str() != "struct" {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "struct" {
         return Err(ParseError::bad_keyword(r));
     }
 
@@ -619,8 +639,8 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
 
 /// FuncSignature ::= 'func' QualifiedIdent '(' FieldDecls ')' TypeSpec
 fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
-    let intro = identifier(r)?;
-    if intro.as_str() != "func" {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "func" {
         return Err(ParseError::bad_keyword(r));
     }
 
@@ -649,8 +669,8 @@ fn func_decl(r: &mut Reader) -> Result<ast::Declaration> {
 
 /// ExternFuncDecl ::= 'extern' FuncSignature ';'
 fn extern_func_decl(r: &mut Reader) -> Result<ast::Declaration> {
-    let intro = identifier(r)?;
-    if intro.as_str() != "extern" {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "extern" {
         return Err(ParseError::bad_keyword(r));
     }
 

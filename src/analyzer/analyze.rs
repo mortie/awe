@@ -40,6 +40,7 @@ struct Scope<'a> {
     frame: Rc<RefCell<StackFrame<'a>>>,
     parent: Option<Rc<Scope<'a>>>,
     vars: RefCell<HashMap<Rc<String>, Rc<sst::LocalVar>>>,
+    types: RefCell<HashMap<Rc<String>, Rc<sst::Type>>>,
     offset: RefCell<usize>,
     props: RefCell<ScopeProps>,
 }
@@ -50,6 +51,7 @@ impl<'a> Scope<'a> {
             frame,
             parent: None,
             vars: RefCell::new(HashMap::new()),
+            types: RefCell::new(HashMap::new()),
             offset: RefCell::new(0),
             props: RefCell::new(ScopeProps::new()),
         })
@@ -60,6 +62,7 @@ impl<'a> Scope<'a> {
             frame: parent.frame.clone(),
             parent: Some(parent),
             vars: RefCell::new(HashMap::new()),
+            types: RefCell::new(HashMap::new()),
             offset: RefCell::new(0),
             props: RefCell::new(ScopeProps::new()),
         })
@@ -113,10 +116,27 @@ impl<'a> Scope<'a> {
         Ok(var)
     }
 
-    fn get_type(self: Rc<Self>, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
-        // TODO: Once type aliases are implemented,
-        // this function will resolve local type aliases
-        get_type(self.frame.borrow().ctx, spec)
+    fn declare_type(&self, name: Rc<String>, typ: Rc<sst::Type>) -> Result<()> {
+        let mut types = self.types.borrow_mut();
+        if types.contains_key(&name) {
+            return Err(AnalysisError::MultipleDefinitions(name));
+        }
+
+        types.insert(name, typ);
+        Ok(())
+    }
+
+    fn get_type(&self, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
+        let ident = ident_to_name(&spec.ident);
+        if let Some(typ) = self.types.borrow().get(&ident) {
+            return Ok(typ.clone());
+        };
+
+        if let Some(parent) = &self.parent {
+            parent.get_type(spec)
+        } else {
+            get_type(self.frame.borrow().ctx, spec)
+        }
     }
 
     fn get_func_sig(&self, ident: &ast::QualifiedIdent) -> Result<Rc<sst::FuncSignature>> {
@@ -463,7 +483,10 @@ fn analyze_expression(
     Ok(expr)
 }
 
-fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
+fn analyze_statement(
+    scope: Rc<Scope>,
+    stmt: &ast::Statement,
+) -> Result<Option<sst::Statement>> {
     match stmt {
         ast::Statement::Return(expr) => {
             let void = scope.frame.borrow().ctx.types.void.clone();
@@ -479,18 +502,24 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             }
 
             scope.props.borrow_mut().always_returns = true;
-            Ok(sst::Statement::Return(sst_expr))
+            Ok(Some(sst::Statement::Return(sst_expr)))
+        }
+
+        ast::Statement::TypeAlias(ident, spec) => {
+            let typ = scope.get_type(spec)?;
+            scope.declare_type(ident.clone(), typ)?;
+            Ok(None)
         }
 
         ast::Statement::VarDecl(ident, expr) => {
             let sst_expr = Box::new(analyze_expression(scope.clone(), expr, None)?);
             let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
-            Ok(sst::Statement::VarDecl(var, sst_expr))
+            Ok(Some(sst::Statement::VarDecl(var, sst_expr)))
         }
 
         ast::Statement::Expression(expr) => {
             let sst_expr = analyze_expression(scope, expr, None)?;
-            Ok(sst::Statement::Expression(Box::new(sst_expr)))
+            Ok(Some(sst::Statement::Expression(Box::new(sst_expr))))
         }
     }
 }
@@ -503,7 +532,9 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
             return Ok(sst_stmts);
         }
 
-        sst_stmts.push(analyze_statement(scope.clone(), stmt)?);
+        if let Some(sst_stmt) = analyze_statement(scope.clone(), stmt)? {
+            sst_stmts.push(sst_stmt);
+        }
     }
 
     Ok(sst_stmts)
