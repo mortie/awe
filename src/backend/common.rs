@@ -6,6 +6,12 @@ use crate::analyzer::sst;
 pub enum CodegenError {
     IOError(io::Error),
     SizeMismatch(usize, usize),
+
+    // Unimplemented is for code that's a work in progress.
+    // Most of the time, nothing which uses Unimplemented will be committed,
+    // so it should always be allowed to be unused.
+    #[allow(dead_code)]
+    Unimplemented,
 }
 
 impl From<io::Error> for CodegenError {

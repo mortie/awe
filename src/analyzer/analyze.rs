@@ -14,6 +14,7 @@ pub enum AnalysisError {
     TypeConflict(Rc<sst::Type>, Rc<sst::Type>),
     InconclusiveInference,
     BadParamCount(usize, usize),
+    BadIntegerLiteral(i128),
 
     // Unimplemented is for code that's a work in progress.
     // Most of the time, nothing which uses Unimplemented will be committed,
@@ -26,11 +27,12 @@ type Result<T> = std::result::Result<T, AnalysisError>;
 
 struct ScopeProps {
     always_returns: bool,
+    is_leaf: bool,
 }
 
 impl ScopeProps {
     fn new() -> Self {
-        Self { always_returns: false }
+        Self { always_returns: false, is_leaf: false }
     }
 }
 
@@ -144,39 +146,46 @@ impl<'a> StackFrame<'a> {
     }
 }
 
+struct Types {
+    void: Rc<sst::Type>,
+    byte: Rc<sst::Type>,
+    short: Rc<sst::Type>,
+    ushort: Rc<sst::Type>,
+    int: Rc<sst::Type>,
+    uint: Rc<sst::Type>,
+    long: Rc<sst::Type>,
+    ulong: Rc<sst::Type>,
+    float: Rc<sst::Type>,
+    double: Rc<sst::Type>,
+    retaddr: Rc<sst::Type>,
+}
+
 struct Context {
     decls: HashMap<Rc<String>, sst::Declaration>,
     underscore: Rc<String>,
-    retaddr: Rc<sst::Type>,
-    void: Rc<sst::Type>,
+    types: Types,
 }
 
 impl Context {
-    fn new(void: Rc<sst::Type>) -> Self {
-        Self {
+    fn new(types: Types) -> Self {
+        let mut ctx = Self {
             decls: HashMap::new(),
             underscore: Rc::new("_".to_owned()),
-            retaddr: Rc::new(sst::Type {
-                name: Rc::new("<retaddr>".to_owned()),
-                size: 8,
-                align: 8,
-                kind: sst::TypeKind::Primitive(sst::Primitive::ReturnAddr),
-            }),
-            void,
-        }
-    }
+            types,
+        };
 
-    fn add_primitive(&mut self, name: &str, size: usize, kind: sst::Primitive) {
-        let name = Rc::new(name.to_owned());
-        self.decls.insert(
-            name.clone(),
-            sst::Declaration::Type(Rc::new(sst::Type {
-                name,
-                size,
-                align: size,
-                kind: sst::TypeKind::Primitive(kind),
-            })),
-        );
+        ctx.add_type(ctx.types.void.clone());
+        ctx.add_type(ctx.types.byte.clone());
+        ctx.add_type(ctx.types.short.clone());
+        ctx.add_type(ctx.types.ushort.clone());
+        ctx.add_type(ctx.types.int.clone());
+        ctx.add_type(ctx.types.uint.clone());
+        ctx.add_type(ctx.types.long.clone());
+        ctx.add_type(ctx.types.ulong.clone());
+        ctx.add_type(ctx.types.float.clone());
+        ctx.add_type(ctx.types.double.clone());
+
+        ctx
     }
 
     fn add_type(&mut self, typ: Rc<sst::Type>) {
@@ -310,12 +319,79 @@ fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
     Ok(())
 }
 
+fn appropriate_int_type_for_num(types: &Types, num: i128) -> Result<Rc<sst::Type>> {
+    if num > i64::MAX as i128 || num < i64::MIN as i128 {
+        Err(AnalysisError::BadIntegerLiteral(num))
+    } else if num > i32::MAX as i128 || num < i32::MIN as i128 {
+        Ok(types.long.clone())
+    } else {
+        Ok(types.int.clone())
+    }
+}
+
+fn analyze_literal(
+    scope: Rc<Scope>,
+    literal: &ast::LiteralExpr,
+    inferred: Option<Rc<sst::Type>>,
+) -> Result<sst::Expression> {
+    match literal {
+        ast::LiteralExpr::Integer(literal) => {
+            let frame = scope.frame.borrow();
+            let types = &frame.ctx.types;
+            let typ = match literal.size {
+                Some(ast::IntegerSize::Byte) => types.byte.clone(),
+                Some(ast::IntegerSize::Short) => types.short.clone(),
+                Some(ast::IntegerSize::UShort) => types.ushort.clone(),
+                Some(ast::IntegerSize::Int) => types.int.clone(),
+                Some(ast::IntegerSize::UInt) => types.uint.clone(),
+                Some(ast::IntegerSize::Long) => types.long.clone(),
+                Some(ast::IntegerSize::ULong) => types.ulong.clone(),
+                None => match inferred {
+                    Some(inferred) => inferred.clone(),
+                    None => appropriate_int_type_for_num(types, literal.num)?,
+                },
+            };
+
+            let (min, max) = if Rc::ptr_eq(&typ, &types.byte) {
+                (u8::MIN as i128, u8::MAX as i128)
+            } else if Rc::ptr_eq(&typ, &types.short) {
+                (i16::MIN as i128, i16::MAX as i128)
+            } else if Rc::ptr_eq(&typ, &types.ushort) {
+                (u16::MIN as i128, u16::MAX as i128)
+            } else if Rc::ptr_eq(&typ, &types.int) {
+                (i32::MIN as i128, i32::MAX as i128)
+            } else if Rc::ptr_eq(&typ, &types.uint) {
+                (u32::MIN as i128, u32::MAX as i128)
+            } else if Rc::ptr_eq(&typ, &types.long) {
+                (i64::MIN as i128, i64::MAX as i128)
+            } else if Rc::ptr_eq(&typ, &types.ulong) {
+                (u64::MIN as i128, u64::MAX as i128)
+            } else {
+                return Err(AnalysisError::BadIntegerLiteral(literal.num));
+            };
+
+            if literal.num < min || literal.num > max {
+                return Err(AnalysisError::BadIntegerLiteral(literal.num));
+            }
+
+            Ok(sst::Expression{
+                typ,
+                kind: sst::ExprKind::Literal(sst::Literal::Integer(literal.num)),
+            })
+        }
+    }
+}
+
 fn analyze_expression(
     scope: Rc<Scope>,
     expr: &ast::Expression,
     inferred: Option<Rc<sst::Type>>,
 ) -> Result<sst::Expression> {
     let expr = match expr {
+        ast::Expression::Literal(literal) => {
+            analyze_literal(scope.clone(), literal, inferred.clone())?
+        }
+
         ast::Expression::FuncCall(ident, params) => {
             let sig = scope.get_func_sig(ident)?;
 
@@ -333,6 +409,8 @@ fn analyze_expression(
                     Some(sig.params.fields[i].typ.clone()),
                 )?);
             }
+
+            scope.props.borrow_mut().is_leaf = false;
 
             sst::Expression {
                 typ: sig.ret.clone(),
@@ -399,7 +477,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
         }
 
         ast::Statement::Return(expr) => {
-            let void = scope.frame.borrow().ctx.void.clone();
+            let void = scope.frame.borrow().ctx.types.void.clone();
             let ret = scope.frame.borrow().ret.clone();
             let sst_expr = match expr {
                 Some(expr) => Some(Box::new(analyze_expression(
@@ -431,30 +509,6 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
     Ok(sst_stmts)
 }
 
-fn add_preamble_to_scope(
-    scope: &Scope,
-    ret: Rc<sst::Type>,
-    params: &Vec<sst::FieldDecl>,
-) -> Result<Rc<sst::LocalVar>> {
-    let frame = scope.frame.borrow();
-    let underscore = frame.ctx.underscore.clone();
-    let retaddr = frame.ctx.retaddr.clone();
-    drop(frame);
-
-    // First put the return value on the stack
-    let retval = scope.declare(underscore.clone(), ret)?;
-
-    // Then, all function parameters, in forward order
-    for param in params {
-        scope.declare(param.name.clone(), param.typ.clone())?;
-    }
-
-    // And after that, the return address
-    scope.declare(underscore, retaddr)?;
-
-    Ok(retval)
-}
-
 fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
     let name = ident_to_name(&fd.signature.ident);
     if ctx.decls.contains_key(&name) {
@@ -462,31 +516,23 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     }
 
     let params = analyze_field_decls(&ctx, &fd.signature.params)?;
-    let ret = get_type(&ctx, &fd.signature.ret)?;
+    let return_type = get_type(&ctx, &fd.signature.ret)?;
+    let retaddr_type = ctx.types.retaddr.clone();
 
-    let frame = StackFrame::new(ctx, ret.clone());
+    let frame = StackFrame::new(ctx, return_type.clone());
     let root_scope = Scope::new(frame.clone());
-    let retvar = add_preamble_to_scope(&root_scope, ret.clone(), &params.fields)?;
-    let preamble_size = *root_scope.offset.borrow();
+    let underscore = frame.borrow().ctx.underscore.clone();
 
-    // We want everything thus far to end up at negative relative addresses,
-    // so that the positive relative addresses are reserved for local variables
-    frame.borrow_mut().size = 0;
-    let mut vars = HashMap::<Rc<String>, Rc<sst::LocalVar>>::new();
-    for (name, var) in root_scope.vars.borrow().iter() {
-        vars.insert(
-            name.clone(),
-            Rc::new(sst::LocalVar {
-                typ: var.typ.clone(),
-                frame_offset: var.frame_offset - preamble_size as isize,
-            }),
-        );
+    // First put the return value on the stack
+    let return_var = root_scope.declare(underscore.clone(), return_type.clone())?;
+
+    // Then, all function parameters, in forward order
+    for param in &params.fields {
+        root_scope.declare(param.name.clone(), param.typ.clone())?;
     }
-    *root_scope.vars.borrow_mut() = vars;
-    let retvar = Rc::new(sst::LocalVar {
-        typ: retvar.typ.clone(),
-        frame_offset: retvar.frame_offset - preamble_size as isize,
-    });
+
+    // And after that, the return address
+    let return_addr = root_scope.declare(underscore, retaddr_type)?;
 
     let body_scope = Scope::from_parent(root_scope);
     let stmts = analyze_block(body_scope.clone(), &fd.body)?;
@@ -496,12 +542,14 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
         signature: Rc::new(sst::FuncSignature {
             name: name.clone(),
             params,
-            ret,
+            ret: return_type,
         }),
-        retvar,
+        return_addr,
+        return_var,
         body: stmts,
         stack_size: frame.borrow().size,
         always_returns: props.always_returns,
+        is_leaf: props.is_leaf,
     });
     drop(props);
 
@@ -534,25 +582,30 @@ fn analyze_extern_func_decl(
 }
 
 pub fn program(prog: &ast::Program) -> Result<sst::Program> {
-    let void = Rc::new(sst::Type{
-        name: Rc::new("void".into()),
-        size: 0,
-        align: 0,
-        kind: sst::TypeKind::Primitive(sst::Primitive::Void),
-    });
+    let primitive = |name: &str, size: usize, kind: sst::Primitive| {
+        Rc::new(sst::Type {
+            name: Rc::new(name.into()),
+            size,
+            align: size,
+            kind: sst::TypeKind::Primitive(kind),
+        })
+    };
 
-    let mut ctx = Context::new(void.clone());
+    let types = Types {
+        void: primitive("void", 0, sst::Primitive::Void),
+        byte: primitive("byte", 1, sst::Primitive::UInt),
+        short: primitive("short", 2, sst::Primitive::Int),
+        ushort: primitive("ushort", 2, sst::Primitive::UInt),
+        int: primitive("int", 4, sst::Primitive::Int),
+        uint: primitive("uint", 4, sst::Primitive::UInt),
+        long: primitive("long", 8, sst::Primitive::Int),
+        ulong: primitive("ulong", 8, sst::Primitive::UInt),
+        float: primitive("float", 4, sst::Primitive::Float),
+        double: primitive("double", 8, sst::Primitive::Float),
+        retaddr: primitive("<retaddr>", 8, sst::Primitive::ReturnAddr),
+    };
 
-    ctx.add_type(void);
-    ctx.add_primitive("byte", 1, sst::Primitive::UInt);
-    ctx.add_primitive("short", 2, sst::Primitive::Int);
-    ctx.add_primitive("ushort", 2, sst::Primitive::UInt);
-    ctx.add_primitive("int", 4, sst::Primitive::Int);
-    ctx.add_primitive("uint", 4, sst::Primitive::UInt);
-    ctx.add_primitive("long", 8, sst::Primitive::Int);
-    ctx.add_primitive("ulong", 8, sst::Primitive::UInt);
-    ctx.add_primitive("float", 4, sst::Primitive::Float);
-    ctx.add_primitive("double", 8, sst::Primitive::Float);
+    let mut ctx = Context::new(types);
 
     let mut functions = Vec::<Rc<sst::Function>>::new();
     let mut extern_funcs = Vec::<Rc<sst::FuncSignature>>::new();

@@ -11,6 +11,8 @@ pub enum ErrorKind {
     ExpectedChar(u8),
     BadKeyword,
     NoMatchingParse,
+    BadDigit(u8),
+    NumberLiteralOverflow,
 }
 
 impl Display for ErrorKind {
@@ -21,6 +23,9 @@ impl Display for ErrorKind {
             ErrorKind::ExpectedChar(ch) => write!(f, "Expected '{}'", ch as char),
             ErrorKind::BadKeyword => write!(f, "Expected a keyword"),
             ErrorKind::NoMatchingParse => write!(f, "No matching parse"),
+            ErrorKind::BadDigit(ch) =>
+                write!(f, "Digit '{}' inappropriate for radix", ch as char),
+            ErrorKind::NumberLiteralOverflow => write!(f, "Number literal overflow"),
         }
     }
 }
@@ -73,6 +78,14 @@ impl ParseError {
 
     fn unexpected_peek(r: &Reader) -> Self {
         Self::unexpected_maybe(r, r.peek())
+    }
+
+    fn bad_digit(r: &Reader, ch: u8) -> Self {
+        Self::new(r, ErrorKind::BadDigit(ch))
+    }
+
+    fn number_literal_overflow(r: &Reader) -> Self {
+        Self::new(r, ErrorKind::NumberLiteralOverflow)
     }
 }
 
@@ -253,6 +266,122 @@ pub fn expr_list(r: &mut Reader) -> Result<Vec<ast::Expression>> {
     }
 }
 
+/// IntegerLiteral ::= '-'? (
+///     '0x' [0-9a-fA-F']+ |
+///     '0o' [0-7']+ |
+///     '0b' [01']+ |
+///     [0-9']+)
+pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
+    let Some(ch) = r.peek() else {
+        return Err(ParseError::unexpected_eof(r));
+    };
+
+    let sign: i128;
+    if r.peek_cmp_consume(b"-") {
+        sign = -1;
+    } else {
+        sign = 1;
+    }
+
+    if ch < b'0' || ch > b'9' {
+        return Err(ParseError::unexpected_char(r, ch));
+    }
+
+    let radix: i128;
+    if r.peek_cmp_consume(b"0x") {
+        radix = 16;
+    } else if r.peek_cmp_consume(b"0o") {
+        radix = 8;
+    } else if r.peek_cmp_consume(b"0b") {
+        radix = 2;
+    } else {
+        radix = 10;
+    }
+
+    // Error with 0x/0o/0b without follow-up digits
+    if ch < b'0' || ch > b'9' {
+        return Err(ParseError::unexpected_char(r, ch));
+    }
+
+    let mut num: i128 = 0;
+    loop {
+        let Some(ch) = r.peek() else {
+            break;
+        };
+
+        if ch == b'\'' {
+            r.consume();
+            continue;
+        }
+
+        let digit;
+        if ch >= b'0' && ch <= b'9' {
+            digit = ch - b'0';
+        } else if ch >= b'a' && ch <= b'z' {
+            digit = ch - b'a';
+        } else if ch >= b'A' && ch <= b'Z' {
+            digit = ch - b'A';
+        } else {
+            break;
+        }
+
+        let digit = digit as i128;
+        if digit >= radix {
+            return Err(ParseError::bad_digit(r, ch));
+        }
+
+        num = match num.checked_mul(radix) {
+            Some(num) => num,
+            None => return Err(ParseError::number_literal_overflow(r)),
+        };
+
+        num = match num.checked_add(digit) {
+            Some(num) => num,
+            None => return Err(ParseError::number_literal_overflow(r)),
+        };
+
+        r.consume();
+    }
+
+    num = match num.checked_mul(sign) {
+        Some(num) => num,
+        None => return Err(ParseError::number_literal_overflow(r)),
+    };
+
+    let size: Option<ast::IntegerSize> = if r.peek_cmp_consume(b"b") {
+        Some(ast::IntegerSize::Byte)
+    } else if r.peek_cmp_consume(b"us") {
+        Some(ast::IntegerSize::UShort)
+    } else if r.peek_cmp_consume(b"ui") {
+        Some(ast::IntegerSize::UInt)
+    } else if r.peek_cmp_consume(b"ul") {
+        Some(ast::IntegerSize::ULong)
+    } else if r.peek_cmp_consume(b"s") {
+        Some(ast::IntegerSize::Short)
+    } else if r.peek_cmp_consume(b"i") {
+        Some(ast::IntegerSize::Int)
+    } else if r.peek_cmp_consume(b"l") {
+        Some(ast::IntegerSize::Long)
+    } else {
+        None
+    };
+
+    Ok(ast::LiteralExpr::Integer(ast::IntegerLiteral { num, size }))
+}
+
+/// LiteralExpr ::= IntegerLiteral
+pub fn literal_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let literal = (|| -> Result<ast::LiteralExpr> {
+        let mut comb = Combinator::new(r);
+
+        try_parse!(comb, integer_literal_expr);
+
+        Err(comb.err())
+    })()?;
+
+    Ok(ast::Expression::Literal(literal))
+}
+
 /// FuncCallExpr ::= QualifiedIdent '(' ExprList ')'
 pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = qualified_ident(r)?;
@@ -324,6 +453,7 @@ pub fn group_expr(r: &mut Reader) -> Result<ast::Expression> {
 }
 
 /// Expression ::=
+///     LiteralExpr |
 ///     FuncCallExpr |
 ///     AssignExpr |
 ///     UninitializedExpr |
@@ -332,6 +462,7 @@ pub fn group_expr(r: &mut Reader) -> Result<ast::Expression> {
 pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
     let mut comb = Combinator::new(r);
 
+    try_parse!(comb, literal_expr);
     try_parse!(comb, func_call_expr);
     try_parse!(comb, assign_expr);
     try_parse!(comb, uninitialized_expr);

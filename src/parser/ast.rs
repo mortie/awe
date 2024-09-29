@@ -18,7 +18,30 @@ pub struct TypeSpec {
 }
 
 #[derive(Debug)]
+pub enum IntegerSize {
+    Byte,
+    Short,
+    UShort,
+    Int,
+    UInt,
+    Long,
+    ULong,
+}
+
+#[derive(Debug)]
+pub struct IntegerLiteral {
+    pub num: i128,
+    pub size: Option<IntegerSize>,
+}
+
+#[derive(Debug)]
+pub enum LiteralExpr {
+    Integer(IntegerLiteral),
+}
+
+#[derive(Debug)]
 pub enum Expression {
+    Literal(LiteralExpr),
     FuncCall(QualifiedIdent, Vec<Expression>),
     Assignment(Ident, Box<Expression>),
     Uninitialized(Option<TypeSpec>),

@@ -62,13 +62,21 @@ pub struct FuncSignature {
 pub struct Function {
     pub signature: Rc<FuncSignature>,
     pub body: Vec<Statement>,
-    pub retvar: Rc<LocalVar>,
+    pub return_addr: Rc<LocalVar>,
+    pub return_var: Rc<LocalVar>,
     pub stack_size: usize,
     pub always_returns: bool,
+    pub is_leaf: bool,
+}
+
+#[derive(Debug)]
+pub enum Literal {
+    Integer(i128),
 }
 
 #[derive(Debug)]
 pub enum ExprKind {
+    Literal(Literal),
     FuncCall(Rc<FuncSignature>, Vec<Expression>),
     Assignment(Rc<LocalVar>, Box<Expression>),
     Uninitialized,

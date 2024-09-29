@@ -4,25 +4,38 @@ use std::rc::Rc;
 use super::common::{self, Result, CodegenError};
 use crate::analyzer::sst;
 
+/*
+ * Registers:
+ * lr (x30): Link register
+ * sp: Stack pointer
+ * x1/w1: Scratch register
+ *
+ * The stack pointer will always point to the byte before the return value.
+ * On function call, the stack pointer should be decremented as necessary
+ * right before the bl instruction,
+ * then promptly incremented back to where it was after the call.
+ */
+
 struct TempVar {
     typ: Rc<sst::Type>,
     stack_base: usize,
     frame_offset: usize,
 }
 
-struct Frame<W: Write> {
+struct Frame<'a, W: Write> {
     w: W,
-    retvar: Rc<sst::LocalVar>,
+    func: &'a sst::Function,
     stack_size: usize,
     temps: Vec<TempVar>,
 }
 
-impl<W: Write> Frame<W> {
-    fn new(w: W, func: &sst::Function) -> Self {
+impl<'a, W: Write> Frame<'a, W> {
+    fn new(w: W, func: &'a sst::Function) -> Self {
+        let stack_size = func.stack_size;
         Self {
             w,
-            retvar: func.retvar.clone(),
-            stack_size: func.stack_size,
+            func,
+            stack_size,
             temps: Vec::new(),
         }
     }
@@ -81,8 +94,35 @@ impl<W: Write> Frame<W> {
     }
 }
 
-fn frame_pointer_offset(var: &sst::LocalVar) -> isize {
+fn frame_offset(var: &sst::LocalVar) -> isize {
     -(var.frame_offset + var.typ.size as isize)
+}
+
+fn gen_integer<W: Write>(
+    frame: &mut Frame<W>,
+    dest: &sst::LocalVar,
+    num: i128,
+) -> Result<()> {
+    let size = dest.typ.size;
+    let doffset = frame_offset(dest);
+
+    if size == 1 {
+        write!(&mut frame.w, "\tmov w1, #{}\n", num)?;
+        write!(&mut frame.w, "\tstrb w1, [sp, #{}]\n", doffset)?;
+    } else if size == 2 {
+        write!(&mut frame.w, "\tmov w1, #{}\n", num)?;
+        write!(&mut frame.w, "\tstrh w1, [sp, #{}]\n", doffset)?;
+    } else if size == 4 {
+        write!(&mut frame.w, "\tmov w1, #{}\n", num)?;
+        write!(&mut frame.w, "\tstrh w1, [sp, #{}]\n", doffset)?;
+    } else if size == 8 {
+        write!(&mut frame.w, "\tmov x1, #{}\n", num)?;
+        write!(&mut frame.w, "\tstrh x1, [sp, #{}]\n", doffset)?;
+    } else {
+        panic!("Unsupported copy size: {}", size);
+    }
+
+    Ok(())
 }
 
 fn gen_copy<W: Write>(
@@ -95,24 +135,24 @@ fn gen_copy<W: Write>(
         return Err(CodegenError::SizeMismatch(dest.typ.size, src.typ.size));
     }
 
-    let doffset = frame_pointer_offset(dest);
-    let soffset = frame_pointer_offset(src);
+    let doffset = frame_offset(dest);
+    let soffset = frame_offset(src);
     if doffset == soffset {
         return Ok(());
     }
 
     if size == 1 {
-        write!(&mut frame.w, "\tldrb w1, [fp, {}]", soffset)?;
-        write!(&mut frame.w, "\tstrb w1, [fp, {}]", doffset)?;
+        write!(&mut frame.w, "\tldrb w1, [sp, #{}]\n", soffset)?;
+        write!(&mut frame.w, "\tstrb w1, [sp, #{}]\n", doffset)?;
     } else if size == 2 {
-        write!(&mut frame.w, "\tldrh w1, [fp, {}]", soffset)?;
-        write!(&mut frame.w, "\tstrh w1, [fp, {}]", doffset)?;
+        write!(&mut frame.w, "\tldrh w1, [sp, #{}]\n", soffset)?;
+        write!(&mut frame.w, "\tstrh w1, [sp, #{}]\n", doffset)?;
     } else if size == 4 {
-        write!(&mut frame.w, "\tldr w1, [fp, {}]", soffset)?;
-        write!(&mut frame.w, "\tstr w1, [fp, {}]", doffset)?;
+        write!(&mut frame.w, "\tldr w1, [sp, #{}]\n", soffset)?;
+        write!(&mut frame.w, "\tstr w1, [sp, #{}]\n", doffset)?;
     } else if size == 8 {
-        write!(&mut frame.w, "\tldr x1, [fp, {}]", soffset)?;
-        write!(&mut frame.w, "\tstr x1, [fp, {}]", doffset)?;
+        write!(&mut frame.w, "\tldr x1, [sp, #{}]\n", soffset)?;
+        write!(&mut frame.w, "\tstr x1, [sp, #{}]\n", doffset)?;
     } else {
         panic!("Unsupported copy size: {}", size);
     }
@@ -130,6 +170,14 @@ fn gen_expr_to<W: Write>(
         expr.kind, expr.typ.size, loc.frame_offset)?;
 
     match &expr.kind {
+        sst::ExprKind::Literal(literal) => {
+            match literal {
+                sst::Literal::Integer(num) => {
+                    gen_integer(frame, loc, *num)?;
+                }
+            }
+        }
+
         sst::ExprKind::FuncCall(_signature, _params) => {
             write!(&mut frame.w, "\t// TODO\n")?;
         }
@@ -162,11 +210,11 @@ fn gen_extern_func<W: Write>(
 }
 
 fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
-    // To return, restore the stack pointer,
-    // pop the return address into bl, and ret
+    // Read the return address into bl if necessary, and ret
     write!(frame.w, "\t// <Return>\n")?;
-    write!(frame.w, "\tadd sp, fp, 16\n")?;
-    write!(frame.w, "\tldr lr, [sp, -8]\n")?;
+    if !frame.func.is_leaf {
+        write!(frame.w, "\tldr lr, [sp, {}]\n", frame_offset(&frame.func.return_addr))?;
+    }
     write!(frame.w, "\tret\n")?;
     write!(frame.w, "\t// </Return>\n")?;
     Ok(())
@@ -186,7 +234,7 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
 
         sst::Statement::Return(expr) => {
             if let Some(expr) = expr {
-                let retvar = frame.retvar.clone();
+                let retvar = frame.func.return_var.clone();
                 gen_expr_to(frame, expr, &retvar)?;
             }
             gen_return(frame)?;
@@ -207,11 +255,7 @@ fn gen_func<W: Write>(frame: &mut Frame<W>, func: &sst::Function) -> Result<()> 
     // in order to conform to the expected stack layout.
     // We also need to put the stack pointer in the frame pointer.
     // Then, we allocate stack space for all the local variables.
-    write!(frame.w, "\t// <Preamble>\n")?;
-    write!(frame.w, "\tstr lr, [sp]\n")?;
-    write!(frame.w, "\tsub sp, sp, 8\n")?;
-    write!(frame.w, "\tmov fp, sp\n")?;
-    write!(frame.w, "\t// </Preamble>\n")?;
+    write!(frame.w, "\tstr lr, [sp, {}]\n", frame_offset(&func.return_addr))?;
 
     for stmt in &func.body {
         write!(frame.w, "\t// <Statement>\n")?;
@@ -244,6 +288,7 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
     write!(w, "_main:\n")?;
     write!(w, "\tbl awe__main\n")?;
     write!(w, "\tmov x0, 0\n")?; // Exit code
+    write!(w, "\tldr w0, [sp, #-4]\n")?; // Exit code
     write!(w, "\tmov x16, 1\n")?; // Terminate svc
     write!(w, "\tsvc 0\n")?;
 
