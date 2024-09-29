@@ -27,16 +27,18 @@ struct Frame<'a, W: Write> {
     func: &'a sst::Function,
     stack_size: usize,
     temps: Vec<TempVar>,
+    sentinel: Rc<sst::Type>,
 }
 
 impl<'a, W: Write> Frame<'a, W> {
-    fn new(w: W, func: &'a sst::Function) -> Self {
+    fn new(w: W, func: &'a sst::Function, sentinel: Rc<sst::Type>) -> Self {
         let stack_size = func.stack_size;
         Self {
             w,
             func,
             stack_size,
             temps: Vec::new(),
+            sentinel,
         }
     }
 
@@ -57,6 +59,26 @@ impl<'a, W: Write> Frame<'a, W> {
 
         sst::LocalVar{
             typ,
+            frame_offset: frame_offset as isize,
+        }
+    }
+
+    fn push_align(&mut self, align: usize) -> sst::LocalVar {
+        let stack_base = self.stack_size;
+        while align > 0 && self.stack_size % align != 0 {
+            self.stack_size += 1;
+        }
+
+        let frame_offset = self.stack_size;
+
+        self.temps.push(TempVar{
+            typ: self.sentinel.clone(),
+            stack_base,
+            frame_offset,
+        });
+
+        sst::LocalVar{
+            typ: self.sentinel.clone(),
             frame_offset: frame_offset as isize,
         }
     }
@@ -165,37 +187,63 @@ fn gen_expr_to<W: Write>(
     expr: &sst::Expression,
     loc: &sst::LocalVar,
 ) -> Result<()> {
-    write!(
-        &mut frame.w, "\t// <Expression kind:{:?} size:{} to:{}>\n",
-        expr.kind, expr.typ.size, loc.frame_offset)?;
-
     match &expr.kind {
         sst::ExprKind::Literal(literal) => {
+            write!(&mut frame.w, "\t// <Expression::Literal {:?}>\n", literal)?;
             match literal {
                 sst::Literal::Integer(num) => {
                     gen_integer(frame, loc, *num)?;
                 }
             }
+            write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
         }
 
-        sst::ExprKind::FuncCall(_signature, _params) => {
-            write!(&mut frame.w, "\t// TODO\n")?;
+        sst::ExprKind::FuncCall(signature, params) => {
+            write!(&mut frame.w, "\t// <Expression::FuncCall {}>\n", signature.name)?;
+            let aligned = frame.push_align(16);
+
+            let return_var = frame.push_temp(signature.ret.clone());
+
+            let mut param_vars = Vec::<sst::LocalVar>::new();
+            param_vars.reserve(params.len());
+            for param in params {
+                let var = frame.push_temp(param.typ.clone());
+                gen_expr_to(frame, param, &var)?;
+                param_vars.push(var);
+            }
+
+            write!(&mut frame.w, "\tsub sp, sp, #{}\n", aligned.frame_offset)?;
+            write!(&mut frame.w, "\tbl awe__{}\n", signature.name)?;
+            write!(&mut frame.w, "\tadd sp, sp, #{}\n", aligned.frame_offset)?;
+
+            while let Some(var) = param_vars.pop() {
+                frame.pop_temp(var);
+            }
+
+            gen_copy(frame, loc, &return_var)?;
+
+            frame.pop_temp(return_var);
+            frame.pop_temp(aligned);
+            write!(&mut frame.w, "\t// </Expression::FuncCall>\n")?;
         }
 
         sst::ExprKind::Assignment(var, expr) => {
+            write!(&mut frame.w, "\t// <Expression::Assignment {:?}>\n", var)?;
             gen_expr_to(frame, expr, var)?;
+            write!(&mut frame.w, "\t// </Expression::Assignment>\n")?;
         }
 
         sst::ExprKind::Uninitialized => {
+            write!(&mut frame.w, "\t// <Expression::Uninitialized />\n")?;
             // Nothing to do here
         }
 
         sst::ExprKind::Variable(var) => {
+            write!(&mut frame.w, "\t// <Expression::Variable {:?}>\n", var)?;
             gen_copy(frame, loc, var)?;
+            write!(&mut frame.w, "\t// </Expression::Variable>\n")?;
         }
     }
-
-    write!(&mut frame.w, "\t// </Expression>\n")?;
 
     Ok(())
 }
@@ -211,43 +259,47 @@ fn gen_extern_func<W: Write>(
 
 fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     // Read the return address into bl if necessary, and ret
-    write!(frame.w, "\t// <Return>\n")?;
     if !frame.func.is_leaf {
         write!(frame.w, "\tldr lr, [sp, {}]\n", frame_offset(&frame.func.return_addr))?;
     }
     write!(frame.w, "\tret\n")?;
-    write!(frame.w, "\t// </Return>\n")?;
     Ok(())
 }
 
 fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()> {
     match stmt {
         sst::Statement::Expression(expr) => {
+            write!(&mut frame.w, "\t// <Statement::Expression>\n")?;
             let local = frame.push_temp(expr.typ.clone());
             gen_expr_to(frame, expr, &local)?;
             frame.pop_temp(local);
+            write!(&mut frame.w, "\t// </Statement::Expression>\n")?;
         }
 
         sst::Statement::VarDecl(var, expr) => {
+            write!(&mut frame.w, "\t// <Statement::VarDecl>\n")?;
             gen_expr_to(frame, expr, &var)?;
+            write!(&mut frame.w, "\t// </Statement::VarDecl>\n")?;
         }
 
         sst::Statement::Return(expr) => {
+            write!(&mut frame.w, "\t// <Statement::Return>\n")?;
             if let Some(expr) = expr {
                 let retvar = frame.func.return_var.clone();
                 gen_expr_to(frame, expr, &retvar)?;
             }
             gen_return(frame)?;
+            write!(&mut frame.w, "\t// </Statement::Return>\n")?;
         }
     }
 
     Ok(())
 }
 
-fn gen_func<W: Write>(frame: &mut Frame<W>, func: &sst::Function) -> Result<()> {
-    common::gen_signature_comment(&mut frame.w, &func.signature)?;
-    write!(frame.w, ".global awe__{}\n", func.signature.name)?;
-    write!(frame.w, "awe__{}:\n", func.signature.name)?;
+fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
+    common::gen_signature_comment(&mut frame.w, &frame.func.signature)?;
+    write!(frame.w, ".global awe__{}\n", frame.func.signature.name)?;
+    write!(frame.w, "awe__{}:\n", frame.func.signature.name)?;
 
     // We expect to have been called using the 'bl' instruction,
     // which puts the return pointer in the link register.
@@ -255,17 +307,17 @@ fn gen_func<W: Write>(frame: &mut Frame<W>, func: &sst::Function) -> Result<()> 
     // in order to conform to the expected stack layout.
     // We also need to put the stack pointer in the frame pointer.
     // Then, we allocate stack space for all the local variables.
-    write!(frame.w, "\tstr lr, [sp, {}]\n", frame_offset(&func.return_addr))?;
+    if !frame.func.is_leaf {
+        write!(frame.w, "\tstr lr, [sp, {}]\n", frame_offset(&frame.func.return_addr))?;
+    }
 
-    for stmt in &func.body {
-        write!(frame.w, "\t// <Statement>\n")?;
+    for stmt in &frame.func.body {
         gen_stmt(frame, stmt)?;
-        write!(frame.w, "\t// </Statement>\n")?;
     }
 
     // Always return at the end of a function,
     // unless the function always returns itself
-    if !func.always_returns {
+    if !frame.func.always_returns {
         gen_return(frame)?;
     }
 
@@ -278,9 +330,16 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
         gen_extern_func(&mut w, func)?;
     }
 
+    let sentinel = Rc::new(sst::Type{
+        name: Rc::new("<sentinel>".to_owned()),
+        size: 0,
+        align: 0,
+        kind: sst::TypeKind::Primitive(sst::Primitive::Void),
+    });
+
     for func in &prog.functions {
-        let mut frame = Frame::new(w, &func);
-        gen_func(&mut frame, func)?;
+        let mut frame = Frame::new(w, &func, sentinel.clone());
+        gen_func(&mut frame)?;
         w = frame.done();
     }
 

@@ -184,7 +184,7 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
         return Err(ParseError::unexpected_eof(r));
     };
 
-    if !is_alpha(ch) {
+    if !is_alpha(ch) && ch != b'_' {
         return Err(ParseError::unexpected_char(r, ch));
     }
     ident.push(ch as char);
@@ -195,7 +195,7 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
             return Err(ParseError::unexpected_eof(r));
         };
 
-        if !is_alnum(ch) {
+        if !is_alnum(ch) && ch != b'_' {
             return Ok(Rc::new(ident));
         }
 

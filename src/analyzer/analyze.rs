@@ -32,7 +32,7 @@ struct ScopeProps {
 
 impl ScopeProps {
     fn new() -> Self {
-        Self { always_returns: false, is_leaf: false }
+        Self { always_returns: false, is_leaf: true}
     }
 }
 
