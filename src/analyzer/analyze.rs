@@ -15,6 +15,7 @@ pub enum AnalysisError {
     InconclusiveInference,
     BadParamCount(usize, usize),
     BadIntegerLiteral(i128),
+    BadTypeParameters,
 
     // Unimplemented is for code that's a work in progress.
     // Most of the time, nothing which uses Unimplemented will be committed,
@@ -116,7 +117,7 @@ impl<'a> Scope<'a> {
         Ok(var)
     }
 
-    fn declare_type(&self, name: Rc<String>, typ: Rc<sst::Type>) -> Result<()> {
+    fn declare_type_alias(&self, name: Rc<String>, typ: Rc<sst::Type>) -> Result<()> {
         let mut types = self.types.borrow_mut();
         if types.contains_key(&name) {
             return Err(AnalysisError::MultipleDefinitions(name));
@@ -126,17 +127,20 @@ impl<'a> Scope<'a> {
         Ok(())
     }
 
-    fn get_type(&self, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
-        let ident = ident_to_name(&spec.ident);
-        if let Some(typ) = self.types.borrow().get(&ident) {
-            return Ok(typ.clone());
+    fn get_type_alias(&self, name: &Rc<String>) -> Option<Rc<sst::Type>> {
+        if let Some(typ) = self.types.borrow().get(name) {
+            return Some(typ.clone());
         };
 
         if let Some(parent) = &self.parent {
-            parent.get_type(spec)
+            parent.get_type_alias(name)
         } else {
-            get_type(self.frame.borrow().ctx, spec)
+            None
         }
+    }
+
+    fn get_type(&self, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
+        get_type(self.frame.borrow_mut().ctx, spec, Some(&self))
     }
 
     fn get_func_sig(&self, ident: &ast::QualifiedIdent) -> Result<Rc<sst::FuncSignature>> {
@@ -234,18 +238,40 @@ fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
     Rc::new(name)
 }
 
-fn get_type(ctx: &Context, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
-    // TODO: template params
+fn get_type(
+    ctx: &mut Context,
+    spec: &ast::TypeSpec,
+    scope: Option<&Scope>,
+) -> Result<Rc<sst::Type>> {
     let ident = ident_to_name(&spec.ident);
-    let Some(decl) = ctx.decls.get(&ident) else {
-        return Err(AnalysisError::UndeclaredType(ident));
-    };
 
-    let sst::Declaration::Type(typ) = decl else {
-        return Err(AnalysisError::UndeclaredType(ident));
-    };
+    if ident.as_str() == "ptr" {
+        if spec.params.len() != 1 {
+            return Err(AnalysisError::BadTypeParameters);
+        }
 
-    Ok(typ.clone())
+        let ast::TypeParam::Type(typ) = &spec.params[0];
+        let typ = get_type(ctx, typ, scope)?;
+        return Ok(make_pointer_to(ctx, typ));
+    }
+
+    if spec.params.len() == 0 {
+        if let Some(typ) = scope.and_then(|scope| scope.get_type_alias(&ident)) {
+            return Ok(typ);
+        }
+
+        if let Some(decl) = ctx.decls.get(&ident) {
+            if let sst::Declaration::Type(typ) = decl {
+                return Ok(typ.clone());
+            }
+        }
+
+        return Err(AnalysisError::UndeclaredType(ident));
+    }
+
+    // TODO: Support type templates
+
+    return Err(AnalysisError::UndeclaredType(ident));
 }
 
 // TODO: support pointers
@@ -268,14 +294,18 @@ fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
     ptr
 }
 
-fn analyze_field_decls(ctx: &Context, field_decls: &[ast::FieldDecl]) -> Result<sst::FieldDecls> {
+fn analyze_field_decls(
+    ctx: &mut Context,
+    field_decls: &[ast::FieldDecl],
+    scope: Option<&Scope>,
+) -> Result<sst::FieldDecls> {
     let mut names = HashSet::<Rc<String>>::new();
     let mut fields = Vec::<sst::FieldDecl>::new();
     let mut offset: usize = 0;
     let mut biggest_align: usize = 0;
     for decl in field_decls {
         let fname = decl.name.clone();
-        let typ = get_type(ctx, &decl.typ)?;
+        let typ = get_type(ctx, &decl.typ, scope)?;
 
         if fname.as_str() != "_" && names.contains(&fname) {
             return Err(AnalysisError::MultipleDefinitions(fname));
@@ -317,7 +347,7 @@ fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
-    let info = analyze_field_decls(&ctx, &sd.fields)?;
+    let info = analyze_field_decls(ctx, &sd.fields, None)?;
 
     let mut fields = HashMap::<Rc<String>, sst::FieldDecl>::new();
     for field in info.fields {
@@ -507,7 +537,7 @@ fn analyze_statement(
 
         ast::Statement::TypeAlias(ident, spec) => {
             let typ = scope.get_type(spec)?;
-            scope.declare_type(ident.clone(), typ)?;
+            scope.declare_type_alias(ident.clone(), typ)?;
             Ok(None)
         }
 
@@ -546,8 +576,8 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
-    let params = analyze_field_decls(&ctx, &fd.signature.params)?;
-    let return_type = get_type(&ctx, &fd.signature.ret)?;
+    let params = analyze_field_decls(ctx, &fd.signature.params, None)?;
+    let return_type = get_type(ctx, &fd.signature.ret, None)?;
     let retaddr_type = ctx.types.retaddr.clone();
 
     let frame = StackFrame::new(ctx, return_type.clone());
@@ -598,8 +628,8 @@ fn analyze_extern_func_decl(
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
-    let params = analyze_field_decls(&ctx, &efd.params)?;
-    let ret = get_type(&ctx, &efd.ret)?;
+    let params = analyze_field_decls(ctx, &efd.params, None)?;
+    let ret = get_type(ctx, &efd.ret, None)?;
 
     let extern_func = Rc::new(sst::FuncSignature {
         name: name.clone(),
