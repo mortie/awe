@@ -1,14 +1,14 @@
 // func syscall_write(int, ptr[void], ulong) long
-.global awe__syscall_write
+.global awe$syscall_write
 .balign 4
-awe__syscall_write:
+awe$syscall_write:
 	ldr w0, [sp, -12]
 	ldr x1, [sp, -24]
 	ldr x2, [sp, -32]
 	mov x16, 4
 	svc 0x80
-	bcc awe__syscall_write__ok
+	bcc awe$syscall_write$ok
 	neg x0, x0
-awe__syscall_write__ok:
+awe$syscall_write$ok:
 	str x0, [sp, -8]
 	ret

@@ -196,7 +196,7 @@ fn gen_expr_to<W: Write>(
                 }
 
                 sst::Literal::String(sc) => {
-                    write!(&mut frame.w, "\tadr x0, awestr__{}\n", sc.index)?;
+                    write!(&mut frame.w, "\tadr x0, awestr${}\n", sc.index)?;
                     write!(&mut frame.w, "\tstr x0, [sp, {}]\n", frame_offset(loc))?;
                 }
             }
@@ -218,7 +218,7 @@ fn gen_expr_to<W: Write>(
             }
 
             write!(&mut frame.w, "\tsub sp, sp, {}\n", aligned.frame_offset)?;
-            write!(&mut frame.w, "\tbl awe__{}\n", signature.name)?;
+            write!(&mut frame.w, "\tbl awe${}\n", signature.name)?;
             write!(&mut frame.w, "\tadd sp, sp, {}\n", aligned.frame_offset)?;
 
             while let Some(var) = param_vars.pop() {
@@ -293,9 +293,9 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
 
 fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     common::gen_signature_comment(&mut frame.w, &frame.func.signature)?;
-    write!(frame.w, ".global awe__{}\n", frame.func.signature.name)?;
+    write!(frame.w, ".global awe${}\n", frame.func.signature.name)?;
     write!(frame.w, ".balign 4\n")?;
-    write!(frame.w, "awe__{}:\n", frame.func.signature.name)?;
+    write!(frame.w, "awe${}:\n", frame.func.signature.name)?;
 
     // We expect to have been called using the 'bl' instruction,
     // which puts the return pointer in the link register.
@@ -338,7 +338,7 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
     write!(w, ".global _main\n")?;
     write!(w, ".balign 4\n")?;
     write!(w, "_main:\n")?;
-    write!(w, "\tbl awe__main\n")?;
+    write!(w, "\tbl awe$main\n")?;
     write!(w, "\tmov x0, 0\n")?; // Exit code
     write!(w, "\tldr w0, [sp, -4]\n")?; // Exit code
     write!(w, "\tmov x16, 1\n")?; // Terminate svc
@@ -347,7 +347,7 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
 
     write!(w, "// Strings\n")?;
     for (s, sc) in &prog.strings {
-        write!(w, "awestr__{}:\n", sc.index)?;
+        write!(w, "awestr${}:\n", sc.index)?;
         write!(w, "\t.ascii \"")?;
         for ch in s.bytes() {
             if ch == b'"' {
