@@ -77,6 +77,7 @@ pub struct StringConstant {
 pub enum Literal {
     Integer(i128),
     String(StringConstant),
+    Bool(bool),
 }
 
 #[derive(Debug)]
@@ -96,9 +97,12 @@ pub struct Expression {
 
 #[derive(Debug)]
 pub enum Statement {
+    If(Box<Expression>, Box<Statement>, Box<Statement>),
     Return(Option<Box<Expression>>),
     VarDecl(Rc<LocalVar>, Box<Expression>),
+    Block(Vec<Statement>),
     Expression(Box<Expression>),
+    Empty,
 }
 
 #[derive(Debug)]
@@ -111,5 +115,5 @@ pub enum Declaration {
 #[derive(Debug)]
 pub struct Program {
     pub functions: Vec<Rc<Function>>,
-    pub strings: Vec<(Rc<String>, StringConstant)>,
+    pub strings: Vec<(StringConstant, Rc<String>)>,
 }

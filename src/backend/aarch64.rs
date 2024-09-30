@@ -22,12 +22,27 @@ struct TempVar {
     frame_offset: usize,
 }
 
+enum MaybeTemp {
+    Temp(sst::LocalVar),
+    NonTemp(Rc<sst::LocalVar>),
+}
+
+impl MaybeTemp {
+    fn var(&self) -> &sst::LocalVar {
+        match self {
+            Self::Temp(var) => var,
+            Self::NonTemp(var) => var,
+        }
+    }
+}
+
 struct Frame<'a, W: Write> {
     w: W,
     func: &'a sst::Function,
     stack_size: usize,
     temps: Vec<TempVar>,
     sentinel: Rc<sst::Type>,
+    next_label: usize,
 }
 
 impl<'a, W: Write> Frame<'a, W> {
@@ -39,6 +54,7 @@ impl<'a, W: Write> Frame<'a, W> {
             stack_size,
             temps: Vec::new(),
             sentinel,
+            next_label: 0,
         }
     }
 
@@ -109,6 +125,18 @@ impl<'a, W: Write> Frame<'a, W> {
         }
 
         self.stack_size = last.stack_base;
+    }
+
+    fn maybe_pop_temp(&mut self, var: MaybeTemp) {
+        if let MaybeTemp::Temp(temp) = var {
+            self.pop_temp(temp);
+        }
+    }
+
+    fn label(&mut self) -> usize {
+        let label = self.next_label;
+        self.next_label += 1;
+        label
     }
 
     fn done(self) -> W {
@@ -199,6 +227,14 @@ fn gen_expr_to<W: Write>(
                     write!(&mut frame.w, "\tadr x0, awestr${}\n", sc.index)?;
                     write!(&mut frame.w, "\tstr x0, [sp, {}]\n", frame_offset(loc))?;
                 }
+
+                sst::Literal::Bool(b) => {
+                    if *b {
+                        gen_integer(frame, loc, 1)?;
+                    } else {
+                        gen_integer(frame, loc, 0)?;
+                    }
+                }
             }
             write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
         }
@@ -252,6 +288,23 @@ fn gen_expr_to<W: Write>(
     Ok(())
 }
 
+fn gen_expr<W: Write>(
+    frame: &mut Frame<W>,
+    expr: &sst::Expression,
+) -> Result<MaybeTemp> {
+    match &expr.kind {
+        sst::ExprKind::Variable(var) => {
+            Ok(MaybeTemp::NonTemp(var.clone()))
+        }
+
+        _ => {
+            let temp = frame.push_temp(expr.typ.clone());
+            gen_expr_to(frame, expr, &temp)?;
+            Ok(MaybeTemp::Temp(temp))
+        }
+    }
+}
+
 fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     // Read the return address into bl if necessary, and ret
     if !frame.func.is_leaf {
@@ -263,6 +316,27 @@ fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
 
 fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()> {
     match stmt {
+        sst::Statement::If(cond, body, else_body) => {
+            write!(&mut frame.w, "\t// <Statement::If>\n")?;
+            let fname = frame.func.signature.name.as_str();
+            let else_label = frame.label();
+            let end_label = frame.label();
+            let condvar = gen_expr(frame, cond)?;
+
+            write!(&mut frame.w, "\tldrb w0, [sp, {}]\n", frame_offset(condvar.var()))?;
+            frame.maybe_pop_temp(condvar);
+
+            write!(&mut frame.w, "\tcbz w0, awe${}$L{}\n", fname, else_label)?;
+            gen_stmt(frame, body)?;
+            write!(&mut frame.w, "\tb awe${}$L{}\n", fname, end_label)?;
+
+            write!(&mut frame.w, "awe${}$L{}:\n", fname, else_label)?;
+            gen_stmt(frame, else_body)?;
+
+            write!(&mut frame.w, "awe${}$L{}:\n", fname, end_label)?;
+            write!(&mut frame.w, "\t// </Statement::If>\n")?;
+        }
+
         sst::Statement::Return(expr) => {
             write!(&mut frame.w, "\t// <Statement::Return>\n")?;
             if let Some(expr) = expr {
@@ -279,12 +353,24 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             write!(&mut frame.w, "\t// </Statement::VarDecl>\n")?;
         }
 
+        sst::Statement::Block(stmts) => {
+            write!(&mut frame.w, "\t// <Statement::Block>\n")?;
+            for stmt in stmts {
+                gen_stmt(frame, stmt)?;
+            }
+            write!(&mut frame.w, "\t// </Statement::Block>\n")?;
+        }
+
         sst::Statement::Expression(expr) => {
             write!(&mut frame.w, "\t// <Statement::Expression>\n")?;
             let local = frame.push_temp(expr.typ.clone());
             gen_expr_to(frame, expr, &local)?;
             frame.pop_temp(local);
             write!(&mut frame.w, "\t// </Statement::Expression>\n")?;
+        }
+
+        sst::Statement::Empty => {
+            write!(&mut frame.w, "\t// </Statement::Empty />\n")?;
         }
     }
 
@@ -346,7 +432,7 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
     write!(w, "\n")?;
 
     write!(w, "// Strings\n")?;
-    for (s, sc) in &prog.strings {
+    for (sc, s) in &prog.strings {
         write!(w, "awestr${}:\n", sc.index)?;
         write!(w, "\t.ascii \"")?;
         for ch in s.bytes() {

@@ -174,6 +174,7 @@ impl<'a> StackFrame<'a> {
 
 struct Types {
     void: Rc<sst::Type>,
+    bool: Rc<sst::Type>,
     byte: Rc<sst::Type>,
     short: Rc<sst::Type>,
     ushort: Rc<sst::Type>,
@@ -190,7 +191,8 @@ struct Context {
     decls: HashMap<Rc<String>, sst::Declaration>,
     underscore: Rc<String>,
     types: Types,
-    string_constants: HashMap<Rc<String>, sst::StringConstant>,
+    string_constant_map: HashMap<Rc<String>, sst::StringConstant>,
+    string_constants: Vec<(sst::StringConstant, Rc<String>)>,
 }
 
 impl Context {
@@ -199,11 +201,13 @@ impl Context {
             decls: HashMap::new(),
             underscore: Rc::new("_".to_owned()),
             types,
-            string_constants: HashMap::new(),
+            string_constant_map: HashMap::new(),
+            string_constants: Vec::new(),
         };
 
         ctx.add_type(ctx.types.void.clone());
         ctx.add_type(ctx.types.byte.clone());
+        ctx.add_type(ctx.types.bool.clone());
         ctx.add_type(ctx.types.short.clone());
         ctx.add_type(ctx.types.ushort.clone());
         ctx.add_type(ctx.types.int.clone());
@@ -222,12 +226,13 @@ impl Context {
     }
 
     fn add_string(&mut self, str: Rc<String>) -> sst::StringConstant {
-        if let Some(sc) = self.string_constants.get(&str) {
+        if let Some(sc) = self.string_constant_map.get(&str) {
             return *sc;
         }
 
         let sc = sst::StringConstant { index: self.string_constants.len() as u32 };
-        self.string_constants.insert(str, sc);
+        self.string_constant_map.insert(str.clone(), sc);
+        self.string_constants.push((sc, str));
         sc
     }
 }
@@ -289,8 +294,6 @@ fn get_type(
     return Err(AnalysisError::UndeclaredType(ident));
 }
 
-// TODO: support pointers
-#[allow(dead_code)]
 fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
     let name = Rc::new(format!("ptr[{}]", typ.name));
     if let Some(decl) = &ctx.decls.get(&name) {
@@ -453,6 +456,14 @@ fn analyze_literal(
                 kind: sst::ExprKind::Literal(sst::Literal::String(sc)),
             })
         }
+
+        ast::LiteralExpr::Bool(b) => {
+            let frame = scope.frame.borrow();
+            Ok(sst::Expression{
+                typ: frame.ctx.types.bool.clone(),
+                kind: sst::ExprKind::Literal(sst::Literal::Bool(*b)),
+            })
+        }
     }
 }
 
@@ -540,8 +551,20 @@ fn analyze_expression(
 fn analyze_statement(
     scope: Rc<Scope>,
     stmt: &ast::Statement,
-) -> Result<Option<sst::Statement>> {
+) -> Result<sst::Statement> {
     match stmt {
+        ast::Statement::If(cond, body, else_body) => {
+            let bool = scope.frame.borrow().ctx.types.bool.clone();
+            let sst_cond = Box::new(analyze_expression(scope.clone(), cond, Some(bool))?);
+            let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
+            let sst_else_body = match else_body {
+                Some(else_body) => Box::new(analyze_statement(scope, else_body)?),
+                None => Box::new(sst::Statement::Empty),
+            };
+
+            Ok(sst::Statement::If(sst_cond, sst_body, sst_else_body))
+        }
+
         ast::Statement::Return(expr) => {
             let void = scope.frame.borrow().ctx.types.void.clone();
             let ret = scope.frame.borrow().ret.clone();
@@ -556,30 +579,46 @@ fn analyze_statement(
             }
 
             scope.props.borrow_mut().always_returns = true;
-            Ok(Some(sst::Statement::Return(sst_expr)))
+            Ok(sst::Statement::Return(sst_expr))
         }
 
         ast::Statement::TypeAlias(ident, spec) => {
             let typ = scope.get_type(spec)?;
             scope.declare_type_alias(ident.clone(), typ)?;
-            Ok(None)
+            Ok(sst::Statement::Empty)
         }
 
         ast::Statement::DebugPrint(expr) => {
             let sst_expr = analyze_expression(scope, expr, None)?;
             eprintln!("DEBUG: Expression has type '{}'", sst_expr.typ.name);
-            Ok(None)
+            Ok(sst::Statement::Empty)
         }
 
         ast::Statement::VarDecl(ident, expr) => {
             let sst_expr = Box::new(analyze_expression(scope.clone(), expr, None)?);
             let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
-            Ok(Some(sst::Statement::VarDecl(var, sst_expr)))
+            Ok(sst::Statement::VarDecl(var, sst_expr))
+        }
+
+        ast::Statement::Block(stmts) => {
+            let subscope = Scope::from_parent(scope.clone());
+            let sst_stmts = analyze_block(subscope.clone(), stmts)?;
+
+            if !subscope.props.borrow().is_leaf {
+                scope.props.borrow_mut().is_leaf = false;
+            }
+
+            // TODO: This should really consider both branches of an if
+            if !subscope.props.borrow().always_returns {
+                scope.props.borrow_mut().always_returns = false;
+            }
+
+            Ok(sst::Statement::Block(sst_stmts))
         }
 
         ast::Statement::Expression(expr) => {
             let sst_expr = analyze_expression(scope, expr, None)?;
-            Ok(Some(sst::Statement::Expression(Box::new(sst_expr))))
+            Ok(sst::Statement::Expression(Box::new(sst_expr)))
         }
     }
 }
@@ -592,8 +631,10 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
             return Ok(sst_stmts);
         }
 
-        if let Some(sst_stmt) = analyze_statement(scope.clone(), stmt)? {
-            sst_stmts.push(sst_stmt);
+        let sst_stmt = analyze_statement(scope.clone(), stmt)?;
+        match sst_stmt {
+            sst::Statement::Empty => (),
+            _ => sst_stmts.push(sst_stmt),
         }
     }
 
@@ -695,6 +736,7 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
     let types = Types {
         void: void.clone(),
         byte: primitive("byte", 1, sst::Primitive::UInt),
+        bool: primitive("bool", 1, sst::Primitive::UInt),
         short: primitive("short", 2, sst::Primitive::Int),
         ushort: primitive("ushort", 2, sst::Primitive::UInt),
         int: primitive("int", 4, sst::Primitive::Int),
@@ -738,13 +780,8 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         }
     }
 
-    let mut strings = Vec::<(Rc<String>, sst::StringConstant)>::new();
-    for kv in ctx.string_constants {
-        strings.push(kv);
-    }
-
     Ok(sst::Program {
         functions,
-        strings,
+        strings: ctx.string_constants,
     })
 }

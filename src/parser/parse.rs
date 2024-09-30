@@ -425,6 +425,18 @@ pub fn string_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     }
 }
 
+/// BoolLiteral ::= 'true' | 'false'
+pub fn bool_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() == "true" {
+        Ok(ast::LiteralExpr::Bool(true))
+    } else if keyword.as_str() == "false" {
+        Ok(ast::LiteralExpr::Bool(false))
+    } else {
+        return Err(ParseError::bad_keyword(r));
+    }
+}
+
 /// LiteralExpr ::= IntegerLiteral
 pub fn literal_expr(r: &mut Reader) -> Result<ast::Expression> {
     let literal = (|| -> Result<ast::LiteralExpr> {
@@ -432,6 +444,7 @@ pub fn literal_expr(r: &mut Reader) -> Result<ast::Expression> {
 
         try_parse!(comb, integer_literal_expr);
         try_parse!(comb, string_literal_expr);
+        try_parse!(comb, bool_literal_expr);
 
         Err(comb.err())
     })()?;
@@ -529,7 +542,46 @@ pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
     Err(comb.err())
 }
 
-/// ReturnStmt ::= 'return' Expression?
+/// ElsePart ::= 'else' Statement
+fn else_part(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "else" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    Ok(statement(r)?)
+}
+
+/// IfStmt ::= 'if' Expression Statement ElsePart?
+fn if_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "if" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    let expr = Box::new(expression(r)?);
+    let body = Box::new(statement(r)?);
+
+    whitespace(r);
+    let point = r.tell();
+    if let Ok(else_body) = else_part(r) {
+        Ok(ast::Statement::If(expr, body, Some(Box::new(else_body))))
+    } else {
+        r.seek(point);
+        Ok(ast::Statement::If(expr, body, None))
+    }
+}
+
+fn semicolon(r: &mut Reader) -> Result<()> {
+    whitespace(r);
+    if !r.peek_cmp_consume(b";") {
+        return Err(ParseError::expected_char(r, b';'));
+    }
+
+    Ok(())
+}
+
+/// ReturnStmt ::= 'return' Expression? ';'
 fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "return" {
@@ -540,13 +592,15 @@ fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let point = r.tell();
     let Ok(expr) = expression(r) else {
         r.seek(point);
+        semicolon(r)?;
         return Ok(ast::Statement::Return(None));
     };
 
+    semicolon(r)?;
     Ok(ast::Statement::Return(Some(Box::new(expr))))
 }
 
-/// TypeAliasStmt ::= 'type' Ident '=' Expression
+/// TypeAliasStmt ::= 'type' Ident '=' Expression ';'
 fn type_alias_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "type" {
@@ -561,10 +615,11 @@ fn type_alias_stmt(r: &mut Reader) -> Result<ast::Statement> {
     }
 
     let spec = type_spec(r)?;
+    semicolon(r)?;
     Ok(ast::Statement::TypeAlias(ident, spec))
 }
 
-/// DebugPrintStmt ::= 'debug' Expression
+/// DebugPrintStmt ::= 'debug' Expression ';'
 fn debug_print_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "debug" {
@@ -572,10 +627,11 @@ fn debug_print_stmt(r: &mut Reader) -> Result<ast::Statement> {
     }
 
     let expr = expression(r)?;
+    semicolon(r)?;
     Ok(ast::Statement::DebugPrint(Box::new(expr)))
 }
 
-/// VarDeclStmt ::= Ident ':=' Expression
+/// VarDeclStmt ::= Ident ':=' Expression ';'
 fn var_decl_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let name = identifier(r)?;
 
@@ -585,42 +641,53 @@ fn var_decl_stmt(r: &mut Reader) -> Result<ast::Statement> {
     }
 
     let expr = expression(r)?;
+    semicolon(r)?;
     Ok(ast::Statement::VarDecl(name, Box::new(expr)))
 }
 
-/// ExpressionStmt ::= Expression
+/// ExpressionStmt ::= Expression ';'
 fn expression_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let expr = expression(r)?;
+    semicolon(r)?;
     Ok(ast::Statement::Expression(Box::new(expr)))
+}
+
+/// BlockStmt ::= Block
+fn block_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    Ok(ast::Statement::Block(block(r)?))
 }
 
 /// Statement ::=
 ///     ReturnStmt |
+///     IfStmt |
 ///     TypeAliasStmt |
 ///     DebugPrintStmt |
 ///     VarDeclStmt |
+///     BlockStmt |
 ///     ExpressionStmt
 pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
     let mut comb = Combinator::new(r);
 
+    try_parse!(comb, if_stmt);
     try_parse!(comb, return_stmt);
     try_parse!(comb, type_alias_stmt);
     try_parse!(comb, debug_print_stmt);
     try_parse!(comb, var_decl_stmt);
+    try_parse!(comb, block_stmt);
     try_parse!(comb, expression_stmt);
 
     Err(comb.err())
 }
 
-/// Block ::= Statement | (Statement ';' Block)
+/// Block ::= '{' (Statement)* }
 pub fn block(r: &mut Reader) -> Result<ast::Block> {
     whitespace(r);
-
-    let mut block = ast::Block::new();
 
     if !r.peek_cmp_consume(b"{") {
         return Err(ParseError::unexpected_peek(r));
     }
+
+    let mut block = ast::Block::new();
 
     loop {
         whitespace(r);
@@ -630,9 +697,6 @@ pub fn block(r: &mut Reader) -> Result<ast::Block> {
         }
 
         block.push(statement(r)?);
-        if !r.peek_cmp_consume(b";") {
-            return Err(ParseError::expected_char(r, b';'));
-        }
     }
 }
 

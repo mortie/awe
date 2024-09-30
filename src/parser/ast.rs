@@ -38,6 +38,7 @@ pub struct IntegerLiteral {
 pub enum LiteralExpr {
     Integer(IntegerLiteral),
     String(Rc<String>),
+    Bool(bool),
 }
 
 #[derive(Debug)]
@@ -52,10 +53,12 @@ pub enum Expression {
 
 #[derive(Debug)]
 pub enum Statement {
+    If(Box<Expression>, Box<Statement>, Option<Box<Statement>>),
     Return(Option<Box<Expression>>),
     TypeAlias(Ident, TypeSpec),
     DebugPrint(Box<Expression>),
     VarDecl(Ident, Box<Expression>),
+    Block(Block),
     Expression(Box<Expression>),
 }
 
