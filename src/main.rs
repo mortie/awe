@@ -6,6 +6,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
+use std::process::exit;
 
 fn codegen<W: Write>(
     w: &mut W,
@@ -35,7 +36,7 @@ fn main() {
         Ok(prog) => prog,
         Err(err) => {
             eprintln!("{}: {}", fname, err);
-            return;
+            exit(1);
         }
     };
 
@@ -43,12 +44,15 @@ fn main() {
         Ok(prog) => prog,
         Err(err) => {
             eprintln!("{:?}", err);
-            return;
+            exit(1);
         }
     };
 
     match codegen(&mut io::stdout(), &prog) {
         Ok(_) => (),
-        Err(err) => eprintln!("{}", err),
+        Err(err) => {
+            eprintln!("{}", err);
+            exit(1);
+        }
     }
 }

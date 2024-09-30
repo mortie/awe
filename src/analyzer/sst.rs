@@ -12,7 +12,6 @@ pub enum Primitive {
     Int,
     UInt,
     Float,
-    ReturnAddr,
 }
 
 #[derive(Debug)]
@@ -69,9 +68,15 @@ pub struct Function {
     pub is_leaf: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct StringConstant {
+    pub index: u32,
+}
+
 #[derive(Debug)]
 pub enum Literal {
     Integer(i128),
+    String(StringConstant),
 }
 
 #[derive(Debug)]
@@ -106,4 +111,5 @@ pub enum Declaration {
 #[derive(Debug)]
 pub struct Program {
     pub functions: Vec<Rc<Function>>,
+    pub strings: Vec<(Rc<String>, StringConstant)>,
 }

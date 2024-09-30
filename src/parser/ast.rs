@@ -37,6 +37,7 @@ pub struct IntegerLiteral {
 #[derive(Debug)]
 pub enum LiteralExpr {
     Integer(IntegerLiteral),
+    String(Rc<String>),
 }
 
 #[derive(Debug)]

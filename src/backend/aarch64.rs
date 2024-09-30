@@ -136,10 +136,10 @@ fn gen_integer<W: Write>(
         write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
     } else if size == 4 {
         write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-        write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tstr w0, [sp, {}]\n", doffset)?;
     } else if size == 8 {
         write!(&mut frame.w, "\tmov x0, {}\n", num)?;
-        write!(&mut frame.w, "\tstrh x0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tstr x0, [sp, {}]\n", doffset)?;
     } else {
         panic!("Unsupported copy size: {}", size);
     }
@@ -194,6 +194,11 @@ fn gen_expr_to<W: Write>(
                 sst::Literal::Integer(num) => {
                     gen_integer(frame, loc, *num)?;
                 }
+
+                sst::Literal::String(sc) => {
+                    write!(&mut frame.w, "\tadr x0, awestr__{}\n", sc.index)?;
+                    write!(&mut frame.w, "\tstr x0, [sp, {}]\n", frame_offset(loc))?;
+                }
             }
             write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
         }
@@ -238,7 +243,7 @@ fn gen_expr_to<W: Write>(
         }
 
         sst::ExprKind::Variable(var) => {
-            write!(&mut frame.w, "\t// <Expression::Variable {:?}>\n", var)?;
+            write!(&mut frame.w, "\t// <Expression::Variable loc:{}>\n", var.frame_offset)?;
             gen_copy(frame, loc, var)?;
             write!(&mut frame.w, "\t// </Expression::Variable>\n")?;
         }
@@ -289,6 +294,7 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
 fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     common::gen_signature_comment(&mut frame.w, &frame.func.signature)?;
     write!(frame.w, ".global awe__{}\n", frame.func.signature.name)?;
+    write!(frame.w, ".balign 4\n")?;
     write!(frame.w, "awe__{}:\n", frame.func.signature.name)?;
 
     // We expect to have been called using the 'bl' instruction,
@@ -330,12 +336,34 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
     }
 
     write!(w, ".global _main\n")?;
+    write!(w, ".balign 4\n")?;
     write!(w, "_main:\n")?;
     write!(w, "\tbl awe__main\n")?;
     write!(w, "\tmov x0, 0\n")?; // Exit code
     write!(w, "\tldr w0, [sp, -4]\n")?; // Exit code
     write!(w, "\tmov x16, 1\n")?; // Terminate svc
     write!(w, "\tsvc 0\n")?;
+    write!(w, "\n")?;
+
+    write!(w, "// Strings\n")?;
+    for (s, sc) in &prog.strings {
+        write!(w, "awestr__{}:\n", sc.index)?;
+        write!(w, "\t.ascii \"")?;
+        for ch in s.bytes() {
+            if ch == b'"' {
+                write!(w, "\\\"")?;
+            } else if ch == b'\\' {
+                write!(w, "\\\\")?;
+            } else if ch == b'\r' {
+                write!(w, "\\r")?;
+            } else if ch == b'\n' {
+                write!(w, "\\n")?;
+            } else {
+                w.write(&[ch])?;
+            }
+        }
+        write!(w, "\\0\"\n")?;
+    }
 
     Ok(())
 }

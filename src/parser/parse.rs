@@ -13,6 +13,8 @@ pub enum ErrorKind {
     NoMatchingParse,
     BadDigit(u8),
     NumberLiteralOverflow,
+    BadEscape(u8),
+    InvalidUTF8,
 }
 
 impl Display for ErrorKind {
@@ -26,6 +28,8 @@ impl Display for ErrorKind {
             ErrorKind::BadDigit(ch) =>
                 write!(f, "Digit '{}' inappropriate for radix", ch as char),
             ErrorKind::NumberLiteralOverflow => write!(f, "Number literal overflow"),
+            ErrorKind::BadEscape(ch) => write!(f, "Bad escape sequence '\\{}'", ch as char),
+            ErrorKind::InvalidUTF8 => write!(f, "Invalid UTF-8 in string literal"),
         }
     }
 }
@@ -86,6 +90,14 @@ impl ParseError {
 
     fn number_literal_overflow(r: &Reader) -> Self {
         Self::new(r, ErrorKind::NumberLiteralOverflow)
+    }
+
+    fn bad_escape(r: &Reader, ch: u8) -> Self {
+        Self::new(r, ErrorKind::BadEscape(ch))
+    }
+
+    fn invalid_utf8(r: &Reader) -> Self {
+        Self::new(r, ErrorKind::InvalidUTF8)
     }
 }
 
@@ -369,12 +381,57 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     Ok(ast::LiteralExpr::Integer(ast::IntegerLiteral { num, size }))
 }
 
+/// StringLiteral ::= '"' ([^"\\] | '\\"' | '\\t' '\\r' | '\\n') '"'
+pub fn string_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
+    if !r.peek_cmp_consume(b"\"") {
+        return Err(ParseError::expected_char(r, b'"'));
+    }
+
+    let mut bytes = Vec::<u8>::new();
+    loop {
+        let Some(ch) = r.peek() else {
+            return Err(ParseError::unexpected_eof(r));
+        };
+
+        if ch == b'\\' {
+            r.consume();
+            let Some(ch) = r.peek() else {
+                return Err(ParseError::unexpected_eof(r));
+            };
+
+            if ch == b'\\' {
+                bytes.push(b'\\');
+            } else if ch == b't' {
+                bytes.push(b'\t');
+            } else if ch == b'r' {
+                bytes.push(b'\r');
+            } else if ch == b'n' {
+                bytes.push(b'\n');
+            } else {
+                return Err(ParseError::bad_escape(r, ch));
+            }
+        } else if ch == b'"' {
+            r.consume();
+            let Ok(str) = String::from_utf8(bytes) else {
+                return Err(ParseError::invalid_utf8(r));
+            };
+
+            return Ok(ast::LiteralExpr::String(Rc::new(str)));
+        } else {
+            bytes.push(ch);
+        }
+
+        r.consume();
+    }
+}
+
 /// LiteralExpr ::= IntegerLiteral
 pub fn literal_expr(r: &mut Reader) -> Result<ast::Expression> {
     let literal = (|| -> Result<ast::LiteralExpr> {
         let mut comb = Combinator::new(r);
 
         try_parse!(comb, integer_literal_expr);
+        try_parse!(comb, string_literal_expr);
 
         Err(comb.err())
     })()?;

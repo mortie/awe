@@ -16,6 +16,8 @@ pub enum AnalysisError {
     BadParamCount(usize, usize),
     BadIntegerLiteral(i128),
     BadTypeParameters,
+    NonVoidFunctionMustReturn,
+    FunctionCtx(Rc<String>, Box<AnalysisError>),
 
     // Unimplemented is for code that's a work in progress.
     // Most of the time, nothing which uses Unimplemented will be committed,
@@ -181,13 +183,14 @@ struct Types {
     ulong: Rc<sst::Type>,
     float: Rc<sst::Type>,
     double: Rc<sst::Type>,
-    retaddr: Rc<sst::Type>,
+    voidptr: Rc<sst::Type>,
 }
 
 struct Context {
     decls: HashMap<Rc<String>, sst::Declaration>,
     underscore: Rc<String>,
     types: Types,
+    string_constants: HashMap<Rc<String>, sst::StringConstant>,
 }
 
 impl Context {
@@ -196,6 +199,7 @@ impl Context {
             decls: HashMap::new(),
             underscore: Rc::new("_".to_owned()),
             types,
+            string_constants: HashMap::new(),
         };
 
         ctx.add_type(ctx.types.void.clone());
@@ -208,12 +212,23 @@ impl Context {
         ctx.add_type(ctx.types.ulong.clone());
         ctx.add_type(ctx.types.float.clone());
         ctx.add_type(ctx.types.double.clone());
+        ctx.add_type(ctx.types.voidptr.clone());
 
         ctx
     }
 
     fn add_type(&mut self, typ: Rc<sst::Type>) {
         self.decls.insert(typ.name.clone(), sst::Declaration::Type(typ));
+    }
+
+    fn add_string(&mut self, str: Rc<String>) -> sst::StringConstant {
+        if let Some(sc) = self.string_constants.get(&str) {
+            return *sc;
+        }
+
+        let sc = sst::StringConstant { index: self.string_constants.len() as u32 };
+        self.string_constants.insert(str, sc);
+        sc
     }
 }
 
@@ -429,6 +444,15 @@ fn analyze_literal(
                 kind: sst::ExprKind::Literal(sst::Literal::Integer(literal.num)),
             })
         }
+
+        ast::LiteralExpr::String(str) => {
+            let mut frame = scope.frame.borrow_mut();
+            let sc = frame.ctx.add_string(str.clone());
+            Ok(sst::Expression{
+                typ: frame.ctx.types.voidptr.clone(),
+                kind: sst::ExprKind::Literal(sst::Literal::String(sc)),
+            })
+        }
     }
 }
 
@@ -584,7 +608,7 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
 
     let params = analyze_field_decls(ctx, &fd.signature.params, None)?;
     let return_type = get_type(ctx, &fd.signature.ret, None)?;
-    let retaddr_type = ctx.types.retaddr.clone();
+    let voidptr_type = ctx.types.voidptr.clone();
 
     let frame = StackFrame::new(ctx, return_type.clone());
     let root_scope = Scope::new(frame.clone());
@@ -599,10 +623,15 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     }
 
     // And after that, the return address
-    let return_addr = root_scope.declare(underscore, retaddr_type)?;
+    let return_addr = root_scope.declare(underscore, voidptr_type)?;
 
     let body_scope = Scope::from_parent(root_scope);
     let stmts = analyze_block(body_scope.clone(), &fd.body)?;
+
+    let returns_void = match return_type.kind {
+        sst::TypeKind::Primitive(sst::Primitive::Void) => true,
+        _ => false,
+    };
 
     let props = body_scope.props.borrow();
     let func = Rc::new(sst::Function {
@@ -619,6 +648,10 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
         is_leaf: props.is_leaf,
     });
     drop(props);
+
+    if !returns_void && !func.always_returns {
+        return Err(AnalysisError::NonVoidFunctionMustReturn);
+    }
 
     ctx.decls
         .insert(name, sst::Declaration::Function(func.clone()));
@@ -658,8 +691,9 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         })
     };
 
+    let void = primitive("void", 0, sst::Primitive::Void);
     let types = Types {
-        void: primitive("void", 0, sst::Primitive::Void),
+        void: void.clone(),
         byte: primitive("byte", 1, sst::Primitive::UInt),
         short: primitive("short", 2, sst::Primitive::Int),
         ushort: primitive("ushort", 2, sst::Primitive::UInt),
@@ -669,7 +703,12 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         ulong: primitive("ulong", 8, sst::Primitive::UInt),
         float: primitive("float", 4, sst::Primitive::Float),
         double: primitive("double", 8, sst::Primitive::Float),
-        retaddr: primitive("<retaddr>", 8, sst::Primitive::ReturnAddr),
+        voidptr: Rc::new(sst::Type{
+            name: Rc::new("ptr[void]".to_owned()),
+            size: 8,
+            align: 8,
+            kind: sst::TypeKind::Pointer(void),
+        })
     };
 
     let mut ctx = Context::new(types);
@@ -683,7 +722,14 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
             }
 
             ast::Declaration::Func(fd) => {
-                functions.push(analyze_func_decl(ctx, fd)?);
+                match analyze_func_decl(ctx, fd) {
+                    Ok(decl) => functions.push(decl),
+                    Err(err) => {
+                        let name = ident_to_name(&fd.signature.ident);
+                        let err = Box::new(err);
+                        return Err(AnalysisError::FunctionCtx(name, err));
+                    }
+                }
             }
 
             ast::Declaration::ExternFunc(efd) => {
@@ -692,7 +738,13 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         }
     }
 
+    let mut strings = Vec::<(Rc<String>, sst::StringConstant)>::new();
+    for kv in ctx.string_constants {
+        strings.push(kv);
+    }
+
     Ok(sst::Program {
         functions,
+        strings,
     })
 }
