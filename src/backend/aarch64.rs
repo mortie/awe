@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::rc::Rc;
 
-use super::common::{self, Result, CodegenError};
+use super::common::{self, CodegenError, Result};
 use crate::analyzer::sst;
 
 /*
@@ -67,13 +67,13 @@ impl<'a, W: Write> Frame<'a, W> {
         let frame_offset = self.stack_size;
         self.stack_size += typ.size;
 
-        self.temps.push(TempVar{
+        self.temps.push(TempVar {
             typ: typ.clone(),
             stack_base,
             frame_offset,
         });
 
-        sst::LocalVar{
+        sst::LocalVar {
             typ,
             frame_offset: frame_offset as isize,
         }
@@ -87,13 +87,13 @@ impl<'a, W: Write> Frame<'a, W> {
 
         let frame_offset = self.stack_size;
 
-        self.temps.push(TempVar{
+        self.temps.push(TempVar {
             typ: self.sentinel.clone(),
             stack_base,
             frame_offset,
         });
 
-        sst::LocalVar{
+        sst::LocalVar {
             typ: self.sentinel.clone(),
             frame_offset: frame_offset as isize,
         }
@@ -115,13 +115,15 @@ impl<'a, W: Write> Frame<'a, W> {
         if !Rc::ptr_eq(&last.typ, &var.typ) {
             panic!(
                 "pop_temp called with wrong type: expected {}, got {}",
-                last.typ.name, var.typ.name);
+                last.typ.name, var.typ.name
+            );
         }
 
         if last.frame_offset as isize != var.frame_offset {
             panic!(
                 "pop_temp called with wrong frame_offset: expected {}, got {}",
-                last.frame_offset, var.frame_offset);
+                last.frame_offset, var.frame_offset
+            );
         }
 
         self.stack_size = last.stack_base;
@@ -148,11 +150,7 @@ fn frame_offset(var: &sst::LocalVar) -> isize {
     -(var.frame_offset + var.typ.size as isize)
 }
 
-fn gen_integer<W: Write>(
-    frame: &mut Frame<W>,
-    dest: &sst::LocalVar,
-    num: i128,
-) -> Result<()> {
+fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) -> Result<()> {
     let size = dest.typ.size;
     let doffset = frame_offset(dest);
 
@@ -240,7 +238,11 @@ fn gen_expr_to<W: Write>(
         }
 
         sst::ExprKind::FuncCall(signature, params) => {
-            write!(&mut frame.w, "\t// <Expression::FuncCall {}>\n", signature.name)?;
+            write!(
+                &mut frame.w,
+                "\t// <Expression::FuncCall {}>\n",
+                signature.name
+            )?;
             let aligned = frame.push_align(16);
 
             let return_var = frame.push_temp(signature.ret.clone());
@@ -279,7 +281,11 @@ fn gen_expr_to<W: Write>(
         }
 
         sst::ExprKind::Variable(var) => {
-            write!(&mut frame.w, "\t// <Expression::Variable loc:{}>\n", var.frame_offset)?;
+            write!(
+                &mut frame.w,
+                "\t// <Expression::Variable loc:{}>\n",
+                var.frame_offset
+            )?;
             gen_copy(frame, loc, var)?;
             write!(&mut frame.w, "\t// </Expression::Variable>\n")?;
         }
@@ -288,14 +294,9 @@ fn gen_expr_to<W: Write>(
     Ok(())
 }
 
-fn gen_expr<W: Write>(
-    frame: &mut Frame<W>,
-    expr: &sst::Expression,
-) -> Result<MaybeTemp> {
+fn gen_expr<W: Write>(frame: &mut Frame<W>, expr: &sst::Expression) -> Result<MaybeTemp> {
     match &expr.kind {
-        sst::ExprKind::Variable(var) => {
-            Ok(MaybeTemp::NonTemp(var.clone()))
-        }
+        sst::ExprKind::Variable(var) => Ok(MaybeTemp::NonTemp(var.clone())),
 
         _ => {
             let temp = frame.push_temp(expr.typ.clone());
@@ -308,7 +309,11 @@ fn gen_expr<W: Write>(
 fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     // Read the return address into bl if necessary, and ret
     if !frame.func.is_leaf {
-        write!(frame.w, "\tldr lr, [sp, {}]\n", frame_offset(&frame.func.return_addr))?;
+        write!(
+            frame.w,
+            "\tldr lr, [sp, {}]\n",
+            frame_offset(&frame.func.return_addr)
+        )?;
     }
     write!(frame.w, "\tret\n")?;
     Ok(())
@@ -323,7 +328,11 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             let end_label = frame.label();
             let condvar = gen_expr(frame, cond)?;
 
-            write!(&mut frame.w, "\tldrb w0, [sp, {}]\n", frame_offset(condvar.var()))?;
+            write!(
+                &mut frame.w,
+                "\tldrb w0, [sp, {}]\n",
+                frame_offset(condvar.var())
+            )?;
             frame.maybe_pop_temp(condvar);
 
             write!(&mut frame.w, "\tcbz w0, awe${}$L{}\n", fname, else_label)?;
@@ -390,7 +399,11 @@ fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     // We also need to put the stack pointer in the frame pointer.
     // Then, we allocate stack space for all the local variables.
     if !frame.func.is_leaf {
-        write!(frame.w, "\tstr lr, [sp, {}]\n", frame_offset(&frame.func.return_addr))?;
+        write!(
+            frame.w,
+            "\tstr lr, [sp, {}]\n",
+            frame_offset(&frame.func.return_addr)
+        )?;
     }
 
     for stmt in &frame.func.body {
@@ -408,7 +421,7 @@ fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
 }
 
 pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
-    let sentinel = Rc::new(sst::Type{
+    let sentinel = Rc::new(sst::Type {
         name: Rc::new("<sentinel>".to_owned()),
         size: 0,
         align: 0,

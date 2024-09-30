@@ -35,7 +35,10 @@ struct ScopeProps {
 
 impl ScopeProps {
     fn new() -> Self {
-        Self { always_returns: false, is_leaf: true}
+        Self {
+            always_returns: false,
+            is_leaf: true,
+        }
     }
 }
 
@@ -222,7 +225,8 @@ impl Context {
     }
 
     fn add_type(&mut self, typ: Rc<sst::Type>) {
-        self.decls.insert(typ.name.clone(), sst::Declaration::Type(typ));
+        self.decls
+            .insert(typ.name.clone(), sst::Declaration::Type(typ));
     }
 
     fn add_string(&mut self, str: Rc<String>) -> sst::StringConstant {
@@ -230,7 +234,9 @@ impl Context {
             return *sc;
         }
 
-        let sc = sst::StringConstant { index: self.string_constants.len() as u32 };
+        let sc = sst::StringConstant {
+            index: self.string_constants.len() as u32,
+        };
         self.string_constant_map.insert(str.clone(), sc);
         self.string_constants.push((sc, str));
         sc
@@ -442,7 +448,7 @@ fn analyze_literal(
                 return Err(AnalysisError::BadIntegerLiteral(literal.num));
             }
 
-            Ok(sst::Expression{
+            Ok(sst::Expression {
                 typ,
                 kind: sst::ExprKind::Literal(sst::Literal::Integer(literal.num)),
             })
@@ -451,7 +457,7 @@ fn analyze_literal(
         ast::LiteralExpr::String(str) => {
             let mut frame = scope.frame.borrow_mut();
             let sc = frame.ctx.add_string(str.clone());
-            Ok(sst::Expression{
+            Ok(sst::Expression {
                 typ: frame.ctx.types.voidptr.clone(),
                 kind: sst::ExprKind::Literal(sst::Literal::String(sc)),
             })
@@ -459,7 +465,7 @@ fn analyze_literal(
 
         ast::LiteralExpr::Bool(b) => {
             let frame = scope.frame.borrow();
-            Ok(sst::Expression{
+            Ok(sst::Expression {
                 typ: frame.ctx.types.bool.clone(),
                 kind: sst::ExprKind::Literal(sst::Literal::Bool(*b)),
             })
@@ -548,10 +554,7 @@ fn analyze_expression(
     Ok(expr)
 }
 
-fn analyze_statement(
-    scope: Rc<Scope>,
-    stmt: &ast::Statement,
-) -> Result<sst::Statement> {
+fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
     match stmt {
         ast::Statement::If(cond, body, else_body) => {
             let bool = scope.frame.borrow().ctx.types.bool.clone();
@@ -570,7 +573,10 @@ fn analyze_statement(
             let ret = scope.frame.borrow().ret.clone();
             let sst_expr = match expr {
                 Some(expr) => Some(Box::new(analyze_expression(
-                    scope.clone(), expr, Some(ret.clone()))?)),
+                    scope.clone(),
+                    expr,
+                    Some(ret.clone()),
+                )?)),
                 None => None,
             };
 
@@ -745,12 +751,12 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         ulong: primitive("ulong", 8, sst::Primitive::UInt),
         float: primitive("float", 4, sst::Primitive::Float),
         double: primitive("double", 8, sst::Primitive::Float),
-        voidptr: Rc::new(sst::Type{
+        voidptr: Rc::new(sst::Type {
             name: Rc::new("ptr[void]".to_owned()),
             size: 8,
             align: 8,
             kind: sst::TypeKind::Pointer(void),
-        })
+        }),
     };
 
     let mut ctx = Context::new(types);
@@ -763,16 +769,14 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
                 analyze_struct_decl(ctx, sd)?;
             }
 
-            ast::Declaration::Func(fd) => {
-                match analyze_func_decl(ctx, fd) {
-                    Ok(decl) => functions.push(decl),
-                    Err(err) => {
-                        let name = ident_to_name(&fd.signature.ident);
-                        let err = Box::new(err);
-                        return Err(AnalysisError::FunctionCtx(name, err));
-                    }
+            ast::Declaration::Func(fd) => match analyze_func_decl(ctx, fd) {
+                Ok(decl) => functions.push(decl),
+                Err(err) => {
+                    let name = ident_to_name(&fd.signature.ident);
+                    let err = Box::new(err);
+                    return Err(AnalysisError::FunctionCtx(name, err));
                 }
-            }
+            },
 
             ast::Declaration::ExternFunc(efd) => {
                 analyze_extern_func_decl(ctx, efd)?;

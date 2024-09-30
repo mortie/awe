@@ -8,10 +8,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::process::exit;
 
-fn codegen<W: Write>(
-    w: &mut W,
-    prog: &analyzer::sst::Program,
-) -> Result<(), Box<dyn Error>> {
+fn codegen<W: Write>(w: &mut W, prog: &analyzer::sst::Program) -> Result<(), Box<dyn Error>> {
     write!(w, "// <PRELUDE>\n")?;
     write!(w, "{}", backend::preludes::AARCH64_DARWIN)?;
     write!(w, "// <PRELUDE>\n")?;

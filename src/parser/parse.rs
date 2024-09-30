@@ -25,8 +25,7 @@ impl Display for ErrorKind {
             ErrorKind::ExpectedChar(ch) => write!(f, "Expected '{}'", ch as char),
             ErrorKind::BadKeyword => write!(f, "Expected a keyword"),
             ErrorKind::NoMatchingParse => write!(f, "No matching parse"),
-            ErrorKind::BadDigit(ch) =>
-                write!(f, "Digit '{}' inappropriate for radix", ch as char),
+            ErrorKind::BadDigit(ch) => write!(f, "Digit '{}' inappropriate for radix", ch as char),
             ErrorKind::NumberLiteralOverflow => write!(f, "Number literal overflow"),
             ErrorKind::BadEscape(ch) => write!(f, "Bad escape sequence '\\{}'", ch as char),
             ErrorKind::InvalidUTF8 => write!(f, "Invalid UTF-8 in string literal"),
