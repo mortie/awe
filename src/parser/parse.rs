@@ -284,16 +284,16 @@ pub fn expr_list(r: &mut Reader) -> Result<Vec<ast::Expression>> {
 ///     '0b' [01']+ |
 ///     [0-9']+)
 pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
-    let Some(ch) = r.peek() else {
-        return Err(ParseError::unexpected_eof(r));
-    };
-
     let sign: i128;
     if r.peek_cmp_consume(b"-") {
         sign = -1;
     } else {
         sign = 1;
     }
+
+    let Some(ch) = r.peek() else {
+        return Err(ParseError::unexpected_eof(r));
+    };
 
     if ch < b'0' || ch > b'9' {
         return Err(ParseError::unexpected_char(r, ch));
