@@ -6,7 +6,38 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
-use std::process::exit;
+use std::path::{Path, PathBuf};
+use std::process::{self, Command};
+
+fn temp_file(suffix: &str) -> io::Result<(PathBuf, fs::File)> {
+    let temp_dir = env::temp_dir();
+
+    let mut num = 0;
+    loop {
+        let mut path = temp_dir.clone();
+        path.push(format!("awe-output.{}.{}", num, suffix));
+
+        let res = fs::OpenOptions::new()
+            .read(false)
+            .write(true)
+            .create_new(true)
+            .open(&path);
+        match res {
+            Ok(file) => {
+                return Ok((path, file));
+            }
+
+            Err(err) => {
+                if err.kind() != io::ErrorKind::AlreadyExists {
+                    return Err(err);
+                }
+
+            }
+        };
+
+        num += 1;
+    }
+}
 
 fn codegen<W: Write>(w: &mut W, prog: &analyzer::sst::Program) -> Result<(), Box<dyn Error>> {
     write!(w, "// <PRELUDE>\n")?;
@@ -14,10 +45,97 @@ fn codegen<W: Write>(w: &mut W, prog: &analyzer::sst::Program) -> Result<(), Box
     write!(w, "// <PRELUDE>\n")?;
     write!(w, "\n")?;
 
-    if let Err(err) = backend::aarch64::codegen(&mut io::stdout(), prog) {
+    if let Err(err) = backend::aarch64::codegen(w, prog) {
         eprintln!("{:?}", err);
     }
 
+    Ok(())
+}
+
+fn compile(prog: &analyzer::sst::Program) -> io::Result<PathBuf> {
+    let (path, mut f) = temp_file("s")?;
+    eprintln!("Compiling...");
+
+    if let Err(err) = codegen(&mut f, prog) {
+        eprintln!("{}", err);
+        let _ =fs::remove_file(path);
+        process::exit(1);
+    }
+
+    if let Err(err) = f.sync_all() {
+        let _ =fs::remove_file(path);
+        return Err(err);
+    }
+
+    Ok(path)
+}
+
+fn assemble(asm_path: &Path) -> io::Result<PathBuf> {
+    let (obj_path, _) = temp_file("o")?;
+    eprintln!("Assembling...");
+
+    let res = Command::new("as").arg("-o").arg(&obj_path).arg(asm_path).spawn();
+    let mut child = match res {
+        Ok(child) => child,
+
+        Err(err) => {
+            let _ = fs::remove_file(asm_path);
+            let _ = fs::remove_file(obj_path);
+            return Err(err);
+        }
+    };
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(err) => {
+            let _ = fs::remove_file(asm_path);
+            let _ = fs::remove_file(obj_path);
+            return Err(err);
+        }
+    };
+
+    if !status.success() {
+        let _ = fs::remove_file(asm_path);
+        let _ = fs::remove_file(obj_path);
+        eprintln!("Assembler exited with error status {}", status);
+        process::exit(1);
+    }
+
+    let _ = fs::remove_file(asm_path);
+    Ok(obj_path)
+}
+
+fn link(obj_path: &Path, out_path: &Path) -> io::Result<()> {
+    eprintln!("Linking to '{}'...", out_path.to_string_lossy());
+
+    let res = Command::new("ld").arg("-o").arg(&out_path).arg(obj_path).spawn();
+    let mut child = match res {
+        Ok(child) => child,
+
+        Err(err) => {
+            let _ = fs::remove_file(obj_path);
+            let _ = fs::remove_file(out_path);
+            return Err(err);
+        }
+    };
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(err) => {
+            let _ = fs::remove_file(obj_path);
+            let _ = fs::remove_file(out_path);
+            return Err(err);
+        }
+    };
+
+    if !status.success() {
+        let _ = fs::remove_file(obj_path);
+        let _ = fs::remove_file(out_path);
+        eprintln!("Linker exited with error status {}", status);
+        process::exit(1);
+    }
+
+    let _ = fs::remove_file(obj_path);
     Ok(())
 }
 
@@ -25,15 +143,18 @@ fn main() {
     let mut args = env::args();
     args.next(); // argv[0]
 
-    let fname = args.next().unwrap();
-    let str = fs::read_to_string(&fname).unwrap();
-    let mut reader = parser::reader::Reader::new(str.as_bytes(), fname.clone());
+    let in_path = args.next().unwrap();
+    let out_path = args.next().unwrap_or_else(||
+        in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
+
+    let str = fs::read_to_string(&in_path).unwrap();
+    let mut reader = parser::reader::Reader::new(str.as_bytes(), in_path.clone());
 
     let prog = match parser::parse::program(&mut reader) {
         Ok(prog) => prog,
         Err(err) => {
-            eprintln!("{}: {}", fname, err);
-            exit(1);
+            eprintln!("{}: {}", in_path, err);
+            process::exit(1);
         }
     };
 
@@ -41,15 +162,19 @@ fn main() {
         Ok(prog) => prog,
         Err(err) => {
             eprintln!("{:?}", err);
-            exit(1);
+            process::exit(1);
         }
     };
 
-    match codegen(&mut io::stdout(), &prog) {
-        Ok(_) => (),
-        Err(err) => {
-            eprintln!("{}", err);
-            exit(1);
-        }
+    let res = (|| -> io::Result<()> {
+        let asm_path = compile(&prog)?;
+        let obj_path = assemble(&asm_path)?;
+        link(&obj_path, &Path::new(&out_path))?;
+        Ok(())
+    })();
+
+    if let Err(err) = res {
+        eprintln!("{}", err);
+        process::exit(1);
     }
 }
