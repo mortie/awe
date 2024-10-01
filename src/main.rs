@@ -140,7 +140,7 @@ fn link(obj_path: &Path, out_path: &Path) -> io::Result<()> {
 }
 
 fn main() {
-    let mut assemble_only = false;
+    let mut codegen_only = false;
     let mut in_path: Option<String> = None;
     let mut out_path: Option<String> = None;
     let mut args = env::args();
@@ -148,14 +148,18 @@ fn main() {
 
     while let Some(arg) = args.next() {
         if arg == "-s" {
-            assemble_only = true;
+            codegen_only = true;
+        } else if arg == "-o" {
+            out_path = args.next();
+            if out_path.is_none() {
+                eprintln!("-o requires an argument");
+                process::exit(1);
+            }
         } else if arg.starts_with("-") {
             eprintln!("Unknown option: {}", arg);
             process::exit(1);
         } else if in_path.is_none() {
             in_path = Some(arg);
-        } else if out_path.is_none() {
-            out_path = Some(arg);
         } else {
             eprintln!("Unexpected argument: {}", arg);
             process::exit(1);
@@ -163,12 +167,16 @@ fn main() {
     }
 
     let Some(in_path) = in_path else {
-        eprintln!("Expected in path");
+        eprintln!("Expected input path");
         process::exit(1);
     };
 
-    let out_path = out_path.unwrap_or_else(||
-        in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
+    // Automatically only generate assembly code if outputting to a .s
+    if let Some(out_path) = &out_path {
+        if out_path.ends_with(".s") {
+            codegen_only = true;
+        }
+    }
 
     let str = fs::read_to_string(&in_path).unwrap();
     let mut reader = parser::reader::Reader::new(str.as_bytes(), in_path.clone());
@@ -189,13 +197,34 @@ fn main() {
         }
     };
 
-    if assemble_only {
-        if let Err(err) = codegen(&mut io::stdout(), &prog) {
+    if codegen_only {
+        let err = match out_path {
+            Some(path) => {
+                let mut opts = fs::OpenOptions::new();
+                opts.write(true).truncate(true);
+                let mut file = match opts.open(path) {
+                    Ok(f) => f,
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        process::exit(1);
+                    }
+                };
+
+                codegen(&mut file, &prog)
+            }
+            None => codegen(&mut io::stdout(), &prog),
+        };
+
+        if let Err(err) = err {
             eprintln!("{}", err);
             process::exit(1);
         }
+
         process::exit(0);
     }
+
+    let out_path = out_path.unwrap_or_else(||
+        in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
 
     let res = (|| -> io::Result<()> {
         let asm_path = compile(&prog)?;
