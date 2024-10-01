@@ -150,22 +150,22 @@ fn frame_offset(var: &sst::LocalVar) -> isize {
     -(var.frame_offset + var.typ.size as isize)
 }
 
-fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) -> Result<()> {
-    let size = dest.typ.size;
-    let doffset = frame_offset(dest);
+fn gen_load<W: Write>(frame: &mut Frame<W>, reg: u8, src: &sst::LocalVar) -> Result<()> {
+    let soffset = frame_offset(src);
+    let size = src.typ.size;
+    let s = match src.typ.kind {
+        sst::TypeKind::Primitive(sst::Primitive::Int) => "s",
+        _ => "",
+    };
 
     if size == 1 {
-        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-        write!(&mut frame.w, "\tstrb w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tldr{}b w{}, [sp, {}]\n", s, reg, soffset)?;
     } else if size == 2 {
-        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-        write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tldr{}h w{}, [sp, {}]\n", s, reg, soffset)?;
     } else if size == 4 {
-        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-        write!(&mut frame.w, "\tstr w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tldr w{}, [sp, {}]\n", reg, soffset)?;
     } else if size == 8 {
-        write!(&mut frame.w, "\tmov x0, {}\n", num)?;
-        write!(&mut frame.w, "\tstr x0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tldr x{}, [sp, {}]\n", reg, soffset)?;
     } else {
         panic!("Unsupported copy size: {}", size);
     }
@@ -173,39 +173,58 @@ fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) 
     Ok(())
 }
 
-fn gen_copy<W: Write>(
-    frame: &mut Frame<W>,
-    dest: &sst::LocalVar,
-    src: &sst::LocalVar,
-) -> Result<()> {
-    let size = dest.typ.size;
-    if size != src.typ.size {
-        return Err(CodegenError::SizeMismatch(dest.typ.size, src.typ.size));
-    }
-
+fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> Result<()> {
     let doffset = frame_offset(dest);
-    let soffset = frame_offset(src);
-    if doffset == soffset {
-        return Ok(());
-    }
+    let size = dest.typ.size;
 
     if size == 1 {
-        write!(&mut frame.w, "\tldrb w0, [sp, {}]\n", soffset)?;
-        write!(&mut frame.w, "\tstrb w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tstrb w{}, [sp, {}]\n", reg, doffset)?;
     } else if size == 2 {
-        write!(&mut frame.w, "\tldrh w0, [sp, {}]\n", soffset)?;
-        write!(&mut frame.w, "\tstrh w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tstrh w{}, [sp, {}]\n", reg, doffset)?;
     } else if size == 4 {
-        write!(&mut frame.w, "\tldr w0, [sp, {}]\n", soffset)?;
-        write!(&mut frame.w, "\tstr w0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tstr w{}, [sp, {}]\n", reg, doffset)?;
     } else if size == 8 {
-        write!(&mut frame.w, "\tldr x0, [sp, {}]\n", soffset)?;
-        write!(&mut frame.w, "\tstr x0, [sp, {}]\n", doffset)?;
+        write!(&mut frame.w, "\tstr x{}, [sp, {}]\n", reg, doffset)?;
     } else {
         panic!("Unsupported copy size: {}", size);
     }
 
     Ok(())
+}
+
+fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) -> Result<()> {
+    let size = dest.typ.size;
+
+    if size == 1 {
+        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
+    } else if size == 2 {
+        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
+    } else if size == 4 {
+        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
+    } else if size == 8 {
+        write!(&mut frame.w, "\tmov x0, {}\n", num)?;
+    } else {
+        panic!("Unsupported copy size: {}", size);
+    }
+
+    gen_store(frame, dest, 0)
+}
+
+fn gen_copy<W: Write>(
+    frame: &mut Frame<W>,
+    dest: &sst::LocalVar,
+    src: &sst::LocalVar,
+) -> Result<()> {
+    if dest.typ.size != src.typ.size {
+        return Err(CodegenError::SizeMismatch(dest.typ.size, src.typ.size));
+    }
+
+    if dest.frame_offset == src.frame_offset {
+        return Ok(());
+    }
+
+    gen_load(frame, 0, src)?;
+    gen_store(frame, dest, 0)
 }
 
 fn gen_expr_to<W: Write>(
@@ -433,16 +452,6 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
         gen_func(&mut frame)?;
         w = frame.done();
     }
-
-    write!(w, ".global _main\n")?;
-    write!(w, ".balign 4\n")?;
-    write!(w, "_main:\n")?;
-    write!(w, "\tbl awe$main\n")?;
-    write!(w, "\tmov x0, 0\n")?; // Exit code
-    write!(w, "\tldr w0, [sp, -4]\n")?; // Exit code
-    write!(w, "\tmov x16, 1\n")?; // Terminate svc
-    write!(w, "\tsvc 0\n")?;
-    write!(w, "\n")?;
 
     write!(w, "// Strings\n")?;
     for (sc, s) in &prog.strings {
