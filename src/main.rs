@@ -58,12 +58,12 @@ fn compile(prog: &analyzer::sst::Program) -> io::Result<PathBuf> {
 
     if let Err(err) = codegen(&mut f, prog) {
         eprintln!("{}", err);
-        let _ =fs::remove_file(path);
+        let _ = fs::remove_file(path);
         process::exit(1);
     }
 
     if let Err(err) = f.sync_all() {
-        let _ =fs::remove_file(path);
+        let _ = fs::remove_file(path);
         return Err(err);
     }
 
@@ -140,11 +140,34 @@ fn link(obj_path: &Path, out_path: &Path) -> io::Result<()> {
 }
 
 fn main() {
+    let mut assemble_only = false;
+    let mut in_path: Option<String> = None;
+    let mut out_path: Option<String> = None;
     let mut args = env::args();
     args.next(); // argv[0]
 
-    let in_path = args.next().unwrap();
-    let out_path = args.next().unwrap_or_else(||
+    while let Some(arg) = args.next() {
+        if arg == "-s" {
+            assemble_only = true;
+        } else if arg.starts_with("-") {
+            eprintln!("Unknown option: {}", arg);
+            process::exit(1);
+        } else if in_path.is_none() {
+            in_path = Some(arg);
+        } else if out_path.is_none() {
+            out_path = Some(arg);
+        } else {
+            eprintln!("Unexpected argument: {}", arg);
+            process::exit(1);
+        }
+    }
+
+    let Some(in_path) = in_path else {
+        eprintln!("Expected in path");
+        process::exit(1);
+    };
+
+    let out_path = out_path.unwrap_or_else(||
         in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
 
     let str = fs::read_to_string(&in_path).unwrap();
@@ -165,6 +188,14 @@ fn main() {
             process::exit(1);
         }
     };
+
+    if assemble_only {
+        if let Err(err) = codegen(&mut io::stdout(), &prog) {
+            eprintln!("{}", err);
+            process::exit(1);
+        }
+        process::exit(0);
+    }
 
     let res = (|| -> io::Result<()> {
         let asm_path = compile(&prog)?;
