@@ -217,7 +217,7 @@ fn main() {
         let err = match out_path {
             Some(path) => {
                 let mut opts = fs::OpenOptions::new();
-                opts.write(true).truncate(true);
+                opts.write(true).truncate(true).create(true);
                 let mut file = match opts.open(path) {
                     Ok(f) => f,
                     Err(err) => {

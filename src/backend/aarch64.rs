@@ -36,6 +36,12 @@ impl MaybeTemp {
     }
 }
 
+#[derive(Clone)]
+struct Loop {
+    break_label: usize,
+    continue_label: usize
+}
+
 struct Frame<'a, W: Write> {
     w: W,
     func: &'a sst::Function,
@@ -43,6 +49,7 @@ struct Frame<'a, W: Write> {
     temps: Vec<TempVar>,
     sentinel: Rc<sst::Type>,
     next_label: usize,
+    loops: Vec<Loop>,
 }
 
 impl<'a, W: Write> Frame<'a, W> {
@@ -55,6 +62,7 @@ impl<'a, W: Write> Frame<'a, W> {
             temps: Vec::new(),
             sentinel,
             next_label: 0,
+            loops: Vec::new(),
         }
     }
 
@@ -139,6 +147,27 @@ impl<'a, W: Write> Frame<'a, W> {
         let label = self.next_label;
         self.next_label += 1;
         label
+    }
+
+    fn push_loop(&mut self) -> Loop {
+        let labels = Loop {
+            break_label: self.label(),
+            continue_label: self.label(),
+        };
+        self.loops.push(labels.clone());
+        labels
+    }
+
+    fn top_loop(&self) -> Option<Loop> {
+        if let Some(labels) = self.loops.first() {
+            return Some(labels.clone())
+        }
+
+        None
+    }
+
+    fn pop_loop(&mut self) {
+        self.loops.pop();
     }
 
     fn done(self) -> W {
@@ -429,6 +458,18 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             write!(&mut frame.w, "\t// </Statement::If>\n")?;
         }
 
+        sst::Statement::Loop(body) => {
+            write!(&mut frame.w, "\t// <Statement::Loop>\n")?;
+            let fname = frame.func.signature.name.as_str();
+            let labels = frame.push_loop();
+            write!(&mut frame.w, "awe${}$L{}:\n", fname, labels.continue_label)?;
+            gen_stmt(frame, body)?;
+            write!(&mut frame.w, "\tb awe${}$L{}\n", fname, labels.continue_label)?;
+            write!(&mut frame.w, "awe${}$L{}:\n", fname, labels.break_label)?;
+            frame.pop_loop();
+            write!(&mut frame.w, "\t// </Statement::Loop>\n")?;
+        }
+
         sst::Statement::Return(expr) => {
             write!(&mut frame.w, "\t// <Statement::Return>\n")?;
             if let Some(expr) = expr {
@@ -437,6 +478,17 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             }
             gen_return(frame)?;
             write!(&mut frame.w, "\t// </Statement::Return>\n")?;
+        }
+
+        sst::Statement::Break => {
+            write!(&mut frame.w, "\t// <Statement::Break>\n")?;
+            let Some(labels) = frame.top_loop() else {
+                return Err(CodegenError::InvalidBreak);
+            };
+
+            let fname = frame.func.signature.name.as_str();
+            write!(&mut frame.w, "\tb awe${}$L{}\n", fname, labels.break_label)?;
+            write!(&mut frame.w, "\t// </Statement::Break>\n")?;
         }
 
         sst::Statement::VarDecl(var, expr) => {

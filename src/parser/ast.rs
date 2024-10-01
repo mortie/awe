@@ -69,7 +69,9 @@ pub enum Expression {
 #[derive(Debug)]
 pub enum Statement {
     If(Box<Expression>, Box<Statement>, Option<Box<Statement>>),
+    Loop(Box<Statement>),
     Return(Option<Box<Expression>>),
+    Break,
     TypeAlias(Ident, TypeSpec),
     DebugPrint(Box<Expression>),
     VarDecl(Ident, Box<Expression>),

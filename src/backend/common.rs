@@ -6,6 +6,7 @@ use crate::analyzer::sst;
 pub enum CodegenError {
     IOError(io::Error),
     SizeMismatch(usize, usize),
+    InvalidBreak,
 
     // Unimplemented is for code that's a work in progress.
     // Most of the time, nothing which uses Unimplemented will be committed,

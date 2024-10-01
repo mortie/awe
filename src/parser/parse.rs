@@ -621,6 +621,17 @@ fn if_stmt(r: &mut Reader) -> Result<ast::Statement> {
     }
 }
 
+/// LoopStmt ::= 'loop' Statement?
+fn loop_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "loop" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    let body = Box::new(statement(r)?);
+    Ok(ast::Statement::Loop(body))
+}
+
 fn semicolon(r: &mut Reader) -> Result<()> {
     whitespace(r);
     if !r.peek_cmp_consume(b";") {
@@ -647,6 +658,17 @@ fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
 
     semicolon(r)?;
     Ok(ast::Statement::Return(Some(Box::new(expr))))
+}
+
+/// BreakStmt ::= 'break' ';'
+fn break_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "break" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    semicolon(r)?;
+    Ok(ast::Statement::Break)
 }
 
 /// TypeAliasStmt ::= 'type' Ident '=' Expression ';'
@@ -707,8 +729,10 @@ fn block_stmt(r: &mut Reader) -> Result<ast::Statement> {
 }
 
 /// Statement ::=
-///     ReturnStmt |
 ///     IfStmt |
+///     LoopStmt |
+///     ReturnStmt |
+///     BreakStmt |
 ///     TypeAliasStmt |
 ///     DebugPrintStmt |
 ///     VarDeclStmt |
@@ -718,7 +742,9 @@ pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
     let mut comb = Combinator::new(r);
 
     try_parse!(comb, if_stmt);
+    try_parse!(comb, loop_stmt);
     try_parse!(comb, return_stmt);
+    try_parse!(comb, break_stmt);
     try_parse!(comb, type_alias_stmt);
     try_parse!(comb, debug_print_stmt);
     try_parse!(comb, var_decl_stmt);

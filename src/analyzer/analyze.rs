@@ -604,6 +604,11 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             Ok(sst::Statement::If(sst_cond, sst_body, sst_else_body))
         }
 
+        ast::Statement::Loop(body) => {
+            let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
+            Ok(sst::Statement::Loop(sst_body))
+        }
+
         ast::Statement::Return(expr) => {
             let void = scope.frame.borrow().ctx.types.void.clone();
             let ret = scope.frame.borrow().ret.clone();
@@ -622,6 +627,10 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
 
             scope.props.borrow_mut().always_returns = true;
             Ok(sst::Statement::Return(sst_expr))
+        }
+
+        ast::Statement::Break => {
+            Ok(sst::Statement::Break)
         }
 
         ast::Statement::TypeAlias(ident, spec) => {

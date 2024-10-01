@@ -111,7 +111,9 @@ pub struct Expression {
 #[derive(Debug)]
 pub enum Statement {
     If(Box<Expression>, Box<Statement>, Box<Statement>),
+    Loop(Box<Statement>),
     Return(Option<Box<Expression>>),
+    Break,
     VarDecl(Rc<LocalVar>, Box<Expression>),
     Block(Vec<Statement>),
     Expression(Box<Expression>),
