@@ -6,7 +6,7 @@ pub struct LocalVar {
     pub frame_offset: isize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Primitive {
     Void,
     Int,
@@ -80,6 +80,18 @@ pub enum Literal {
     Bool(bool),
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Neq,
+    Lt,
+    Leq,
+}
+
 #[derive(Debug)]
 pub enum ExprKind {
     Literal(Literal),
@@ -87,6 +99,7 @@ pub enum ExprKind {
     Assignment(Rc<LocalVar>, Box<Expression>),
     Uninitialized,
     Variable(Rc<LocalVar>),
+    BinOp(Box<Expression>, BinOp, Box<Expression>),
 }
 
 #[derive(Debug)]

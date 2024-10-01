@@ -521,14 +521,14 @@ pub fn group_expr(r: &mut Reader) -> Result<ast::Expression> {
     Ok(expr)
 }
 
-/// Expression ::=
+/// ExpressionAtom ::=
 ///     LiteralExpr |
 ///     FuncCallExpr |
 ///     AssignExpr |
 ///     UninitializedExpr |
 ///     GroupExpr |
 ///     VariableExpr
-pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
+pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
     let mut comb = Combinator::new(r);
 
     try_parse!(comb, literal_expr);
@@ -539,6 +539,56 @@ pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
     try_parse!(comb, variable_expr);
 
     Err(comb.err())
+}
+
+/// BinOp ::= '+' | '-' | '*' | '/' | '==' | '!=' | '>' | '>=' | '<' | '<='
+/// ExpressionPart ::= 
+///     ExpressionAtom BinOp Expression |
+///     ExpressionAtom Expression |
+///     ExpressionAtom
+pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
+    let expr = expression_atom(r)?;
+
+    whitespace(r);
+    let binop = if r.peek_cmp_consume(b"+") {
+        Some(ast::BinOp::Add)
+    } else if r.peek_cmp_consume(b"-") {
+        Some(ast::BinOp::Sub)
+    } else if r.peek_cmp_consume(b"*") {
+        Some(ast::BinOp::Mul)
+    } else if r.peek_cmp_consume(b"/") {
+        Some(ast::BinOp::Div)
+    } else if r.peek_cmp_consume(b"==") {
+        Some(ast::BinOp::Eq)
+    } else if r.peek_cmp_consume(b"!=") {
+        Some(ast::BinOp::Neq)
+    } else if r.peek_cmp_consume(b"<=") {
+        Some(ast::BinOp::Leq)
+    } else if r.peek_cmp_consume(b"<") {
+        Some(ast::BinOp::Lt)
+    } else if r.peek_cmp_consume(b">=") {
+        Some(ast::BinOp::Geq)
+    } else if r.peek_cmp_consume(b">") {
+        Some(ast::BinOp::Gt)
+    } else {
+        None
+    };
+
+    if let Some(binop) = binop {
+        let rhs = Box::new(expression(r)?);
+        return Ok(ast::Expression::BinOp(Box::new(expr), binop, rhs));
+    }
+
+    // Concatenative multiplication
+    let point = r.tell();
+    if let Ok(rhs) = expression(r) {
+        let rhs = Box::new(rhs);
+        return Ok(ast::Expression::BinOp(Box::new(expr), ast::BinOp::Mul, rhs));
+    } else {
+        r.seek(point);
+    }
+
+    Ok(expr)
 }
 
 /// ElsePart ::= 'else' Statement

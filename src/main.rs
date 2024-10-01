@@ -141,6 +141,8 @@ fn link(obj_path: &Path, out_path: &Path) -> io::Result<()> {
 
 fn main() {
     let mut codegen_only = false;
+    let mut parse_only = false;
+    let mut analyze_only = false;
     let mut in_path: Option<String> = None;
     let mut out_path: Option<String> = None;
     let mut args = env::args();
@@ -149,6 +151,10 @@ fn main() {
     while let Some(arg) = args.next() {
         if arg == "-s" {
             codegen_only = true;
+        } else if arg == "--parse" {
+            parse_only = true;
+        } else if arg == "--analyze" {
+            analyze_only = true;
         } else if arg == "-o" {
             out_path = args.next();
             if out_path.is_none() {
@@ -189,6 +195,11 @@ fn main() {
         }
     };
 
+    if parse_only {
+        println!("AST: {:#?}", prog);
+        process::exit(0);
+    }
+
     let prog = match analyzer::analyze::program(&prog) {
         Ok(prog) => prog,
         Err(err) => {
@@ -196,6 +207,11 @@ fn main() {
             process::exit(1);
         }
     };
+
+    if analyze_only {
+        println!("SST: {:#?}", prog);
+        process::exit(0);
+    }
 
     if codegen_only {
         let err = match out_path {

@@ -42,6 +42,20 @@ pub enum LiteralExpr {
 }
 
 #[derive(Debug)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Neq,
+    Lt,
+    Leq,
+    Gt,
+    Geq,
+}
+
+#[derive(Debug)]
 pub enum Expression {
     Literal(LiteralExpr),
     FuncCall(QualifiedIdent, Vec<Expression>),
@@ -49,6 +63,7 @@ pub enum Expression {
     Uninitialized(Option<TypeSpec>),
     Variable(Ident),
     Group(Box<Expression>),
+    BinOp(Box<Expression>, BinOp, Box<Expression>),
 }
 
 #[derive(Debug)]

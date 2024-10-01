@@ -543,6 +543,42 @@ fn analyze_expression(
         }
 
         ast::Expression::Group(expr) => analyze_expression(scope, expr, inferred.clone())?,
+
+        ast::Expression::BinOp(lhs, op, rhs) => {
+            let (sst_op, is_bool, flip) = match op {
+                ast::BinOp::Add => (sst::BinOp::Add, false, false),
+                ast::BinOp::Sub => (sst::BinOp::Sub, false, false),
+                ast::BinOp::Mul => (sst::BinOp::Mul, false, false),
+                ast::BinOp::Div => (sst::BinOp::Div, false, false),
+                ast::BinOp::Eq => (sst::BinOp::Eq, true, false),
+                ast::BinOp::Neq => (sst::BinOp::Neq, true, false),
+                ast::BinOp::Lt => (sst::BinOp::Lt, true, false),
+                ast::BinOp::Leq => (sst::BinOp::Leq, true, false),
+                ast::BinOp::Gt => (sst::BinOp::Lt, true, true),
+                ast::BinOp::Geq => (sst::BinOp::Leq, true, true),
+            };
+
+            let (subexpr_type, expr_type) = match is_bool {
+                false => (inferred.clone(), inferred.clone()),
+                true => (None, Some(scope.frame.borrow().ctx.types.bool.clone())),
+            };
+
+            let mut sst_lhs = Box::new(analyze_expression(
+                scope.clone(), lhs, subexpr_type)?);
+            let mut sst_rhs = Box::new(analyze_expression(
+                scope.clone(), rhs, Some(sst_lhs.typ.clone()))?);
+
+            if flip {
+                let tmp = sst_lhs;
+                sst_lhs = sst_rhs;
+                sst_rhs = tmp;
+            }
+
+            sst::Expression{
+                typ: expr_type.unwrap_or(sst_lhs.typ.clone()),
+                kind: sst::ExprKind::BinOp(sst_lhs, sst_op, sst_rhs),
+            }
+        }
     };
 
     if let Some(inferred) = &inferred {

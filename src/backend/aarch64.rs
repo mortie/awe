@@ -158,17 +158,14 @@ fn gen_load<W: Write>(frame: &mut Frame<W>, reg: u8, src: &sst::LocalVar) -> Res
         _ => "",
     };
 
-    if size == 1 {
-        write!(&mut frame.w, "\tldr{}b w{}, [sp, {}]\n", s, reg, soffset)?;
-    } else if size == 2 {
-        write!(&mut frame.w, "\tldr{}h w{}, [sp, {}]\n", s, reg, soffset)?;
-    } else if size == 4 {
-        write!(&mut frame.w, "\tldr w{}, [sp, {}]\n", reg, soffset)?;
-    } else if size == 8 {
-        write!(&mut frame.w, "\tldr x{}, [sp, {}]\n", reg, soffset)?;
-    } else {
-        panic!("Unsupported copy size: {}", size);
-    }
+    let w = &mut frame.w;
+    match size {
+        1 => write!(w, "\tldr{}b w{}, [sp, {}]\n", s, reg, soffset),
+        2 => write!(w, "\tldr{}h w{}, [sp, {}]\n", s, reg, soffset),
+        4 => write!(w, "\tldr w{}, [sp, {}]\n", reg, soffset),
+        8 => write!(w, "\tldr x{}, [sp, {}]\n", reg, soffset),
+        _ => panic!("Unsupported load size: {}", size),
+    }?;
 
     Ok(())
 }
@@ -177,17 +174,14 @@ fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> R
     let doffset = frame_offset(dest);
     let size = dest.typ.size;
 
-    if size == 1 {
-        write!(&mut frame.w, "\tstrb w{}, [sp, {}]\n", reg, doffset)?;
-    } else if size == 2 {
-        write!(&mut frame.w, "\tstrh w{}, [sp, {}]\n", reg, doffset)?;
-    } else if size == 4 {
-        write!(&mut frame.w, "\tstr w{}, [sp, {}]\n", reg, doffset)?;
-    } else if size == 8 {
-        write!(&mut frame.w, "\tstr x{}, [sp, {}]\n", reg, doffset)?;
-    } else {
-        panic!("Unsupported copy size: {}", size);
-    }
+    let w = &mut frame.w;
+    match size {
+        1 => write!(w, "\tstrb w{}, [sp, {}]\n", reg, doffset),
+        2 => write!(w, "\tstrh w{}, [sp, {}]\n", reg, doffset),
+        4 => write!(w, "\tstr w{}, [sp, {}]\n", reg, doffset),
+        8 => write!(w, "\tstr x{}, [sp, {}]\n", reg, doffset),
+        _ => panic!("Unsupported store size: {}", size),
+    }?;
 
     Ok(())
 }
@@ -195,17 +189,77 @@ fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> R
 fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) -> Result<()> {
     let size = dest.typ.size;
 
-    if size == 1 {
-        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-    } else if size == 2 {
-        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-    } else if size == 4 {
-        write!(&mut frame.w, "\tmov w0, {}\n", num)?;
-    } else if size == 8 {
-        write!(&mut frame.w, "\tmov x0, {}\n", num)?;
-    } else {
-        panic!("Unsupported copy size: {}", size);
-    }
+    let w = &mut frame.w;
+    match size {
+        1 => write!(w, "\tmov w0, {}\n", num),
+        2 => write!(w, "\tmov w0, {}\n", num),
+        4 => write!(w, "\tmov w0, {}\n", num),
+        8 => write!(w, "\tmov x0, {}\n", num),
+        _ => panic!("Unsupported integer size: {}", size),
+    }?;
+
+    gen_store(frame, dest, 0)
+}
+
+fn gen_binop<W: Write>(
+    frame: &mut Frame<W>,
+    dest: &sst::LocalVar,
+    lhs: &sst::LocalVar,
+    op: sst::BinOp,
+    rhs: &sst::LocalVar,
+) -> Result<()> {
+    let size = lhs.typ.size;
+    gen_load(frame, 0, lhs)?;
+    gen_load(frame, 1, rhs)?;
+
+    // Register prefix
+    let r = match size {
+        0..=4 => "w",
+        _ => "x",
+    };
+
+    // Signedness
+    let signed = match lhs.typ.kind {
+        sst::TypeKind::Primitive(sst::Primitive::Int) => true,
+        _ => false,
+    };
+
+    let w = &mut frame.w;
+    match op {
+        sst::BinOp::Add => write!(w, "\tadd {r}0, {r}0, {r}1\n"),
+        sst::BinOp::Sub => write!(w, "\tsub {r}0, {r}0, {r}1\n"),
+        sst::BinOp::Mul => write!(w, "\tmul {r}0, {r}0, {r}1\n"),
+        sst::BinOp::Div => match signed {
+            true => write!(w, "\tsdiv {r}0, {r}0, {r}1\n"),
+            false => write!(w, "\tudiv {r}0, {r}0, {r}1\n"),
+        }
+
+        sst::BinOp::Eq => {
+            write!(w, "\tcmp {r}0, {r}1\n")?;
+            write!(w, "\tcset {r}0, EQ\n")
+        }
+
+        sst::BinOp::Neq => {
+            write!(w, "\tcmp {r}0, {r}1\n")?;
+            write!(w, "\tcset {r}0, zr, zr, NE\n")
+        }
+
+        sst::BinOp::Lt => {
+            write!(w, "\tcmp {r}0, {r}1\n")?;
+            match signed {
+                true => write!(w, "\tcset {r}0, LT\n"),
+                false => write!(w, "\tcset {r}0, LO\n"),
+            }
+        }
+
+        sst::BinOp::Leq => {
+            write!(w, "\tcmp {r}0, {r}1\n")?;
+            match signed {
+                true => write!(w, "\tcset {r}0, LE\n"),
+                false => write!(w, "\tcset {r}0, LS\n"),
+            }
+        }
+    }?;
 
     gen_store(frame, dest, 0)
 }
@@ -307,6 +361,16 @@ fn gen_expr_to<W: Write>(
             )?;
             gen_copy(frame, loc, var)?;
             write!(&mut frame.w, "\t// </Expression::Variable>\n")?;
+        }
+
+        sst::ExprKind::BinOp(lhs, op, rhs) => {
+            write!(&mut frame.w, "\t// <Expression::BinOp {:?}>\n", op)?;
+            let lhs_var = gen_expr(frame, lhs)?;
+            let rhs_var = gen_expr(frame, rhs)?;
+            gen_binop(frame, loc, lhs_var.var(), *op, rhs_var.var())?;
+            frame.maybe_pop_temp(rhs_var);
+            frame.maybe_pop_temp(lhs_var);
+            write!(&mut frame.w, "\t// </Expression::BinOp>\n")?;
         }
     }
 
