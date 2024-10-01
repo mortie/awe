@@ -373,7 +373,7 @@ fn gen_expr_to<W: Write>(
         }
 
         sst::ExprKind::Assignment(var, expr) => {
-            write!(&mut frame.w, "\t// <Expression::Assignment {:?}>\n", var)?;
+            write!(&mut frame.w, "\t// <Expression::Assignment>\n")?;
             gen_expr_to(frame, expr, var)?;
             write!(&mut frame.w, "\t// </Expression::Assignment>\n")?;
         }
