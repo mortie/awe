@@ -689,6 +689,9 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
+    // Analyze the signature first, so that recursive calls work
+    analyze_extern_func_decl(ctx, &fd.signature)?;
+
     let params = analyze_field_decls(ctx, &fd.signature.params, None)?;
     let return_type = get_type(ctx, &fd.signature.ret, None)?;
     let voidptr_type = ctx.types.voidptr.clone();

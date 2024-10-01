@@ -542,7 +542,7 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
 }
 
 /// BinOp ::= '+' | '-' | '*' | '/' | '==' | '!=' | '>' | '>=' | '<' | '<='
-/// ExpressionPart ::= 
+/// Expression ::=
 ///     ExpressionAtom BinOp Expression |
 ///     ExpressionAtom Expression |
 ///     ExpressionAtom
