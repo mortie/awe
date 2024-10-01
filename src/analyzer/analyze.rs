@@ -563,10 +563,12 @@ fn analyze_expression(
                 true => (None, Some(scope.frame.borrow().ctx.types.bool.clone())),
             };
 
-            let mut sst_lhs = Box::new(analyze_expression(
-                scope.clone(), lhs, subexpr_type)?);
+            let mut sst_lhs = Box::new(analyze_expression(scope.clone(), lhs, subexpr_type)?);
             let mut sst_rhs = Box::new(analyze_expression(
-                scope.clone(), rhs, Some(sst_lhs.typ.clone()))?);
+                scope.clone(),
+                rhs,
+                Some(sst_lhs.typ.clone()),
+            )?);
 
             if flip {
                 let tmp = sst_lhs;
@@ -574,7 +576,7 @@ fn analyze_expression(
                 sst_rhs = tmp;
             }
 
-            sst::Expression{
+            sst::Expression {
                 typ: expr_type.unwrap_or(sst_lhs.typ.clone()),
                 kind: sst::ExprKind::BinOp(sst_lhs, sst_op, sst_rhs),
             }
@@ -629,9 +631,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             Ok(sst::Statement::Return(sst_expr))
         }
 
-        ast::Statement::Break => {
-            Ok(sst::Statement::Break)
-        }
+        ast::Statement::Break => Ok(sst::Statement::Break),
 
         ast::Statement::TypeAlias(ident, spec) => {
             let typ = scope.get_type(spec)?;

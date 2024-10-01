@@ -31,7 +31,6 @@ fn temp_file(suffix: &str) -> io::Result<(PathBuf, fs::File)> {
                 if err.kind() != io::ErrorKind::AlreadyExists {
                     return Err(err);
                 }
-
             }
         };
 
@@ -74,7 +73,11 @@ fn assemble(asm_path: &Path) -> io::Result<PathBuf> {
     let (obj_path, _) = temp_file("o")?;
     eprintln!("Assembling...");
 
-    let res = Command::new("as").arg("-o").arg(&obj_path).arg(asm_path).spawn();
+    let res = Command::new("as")
+        .arg("-o")
+        .arg(&obj_path)
+        .arg(asm_path)
+        .spawn();
     let mut child = match res {
         Ok(child) => child,
 
@@ -108,7 +111,11 @@ fn assemble(asm_path: &Path) -> io::Result<PathBuf> {
 fn link(obj_path: &Path, out_path: &Path) -> io::Result<()> {
     eprintln!("Linking to '{}'...", out_path.to_string_lossy());
 
-    let res = Command::new("ld").arg("-o").arg(&out_path).arg(obj_path).spawn();
+    let res = Command::new("ld")
+        .arg("-o")
+        .arg(&out_path)
+        .arg(obj_path)
+        .spawn();
     let mut child = match res {
         Ok(child) => child,
 
@@ -239,8 +246,8 @@ fn main() {
         process::exit(0);
     }
 
-    let out_path = out_path.unwrap_or_else(||
-        in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
+    let out_path =
+        out_path.unwrap_or_else(|| in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
 
     let res = (|| -> io::Result<()> {
         let asm_path = compile(&prog)?;

@@ -39,7 +39,7 @@ impl MaybeTemp {
 #[derive(Clone)]
 struct Loop {
     break_label: usize,
-    continue_label: usize
+    continue_label: usize,
 }
 
 struct Frame<'a, W: Write> {
@@ -160,7 +160,7 @@ impl<'a, W: Write> Frame<'a, W> {
 
     fn top_loop(&self) -> Option<Loop> {
         if let Some(labels) = self.loops.first() {
-            return Some(labels.clone())
+            return Some(labels.clone());
         }
 
         None
@@ -261,7 +261,7 @@ fn gen_binop<W: Write>(
         sst::BinOp::Div => match signed {
             true => write!(w, "\tsdiv {r}0, {r}0, {r}1\n"),
             false => write!(w, "\tudiv {r}0, {r}0, {r}1\n"),
-        }
+        },
 
         sst::BinOp::Eq => {
             write!(w, "\tcmp {r}0, {r}1\n")?;
@@ -464,7 +464,11 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             let labels = frame.push_loop();
             write!(&mut frame.w, "awe${}$L{}:\n", fname, labels.continue_label)?;
             gen_stmt(frame, body)?;
-            write!(&mut frame.w, "\tb awe${}$L{}\n", fname, labels.continue_label)?;
+            write!(
+                &mut frame.w,
+                "\tb awe${}$L{}\n",
+                fname, labels.continue_label
+            )?;
             write!(&mut frame.w, "awe${}$L{}:\n", fname, labels.break_label)?;
             frame.pop_loop();
             write!(&mut frame.w, "\t// </Statement::Loop>\n")?;
