@@ -100,6 +100,7 @@ pub enum ExprKind {
     Uninitialized,
     Variable(Rc<LocalVar>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
+    Reference(Box<Expression>),
 }
 
 #[derive(Debug)]

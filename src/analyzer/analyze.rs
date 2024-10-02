@@ -581,6 +581,14 @@ fn analyze_expression(
                 kind: sst::ExprKind::BinOp(sst_lhs, sst_op, sst_rhs),
             }
         }
+
+        ast::Expression::Reference(expr) => {
+            let sst_expr = analyze_expression(scope.clone(), expr, None)?;
+            sst::Expression {
+                typ: make_pointer_to(scope.frame.borrow_mut().ctx, sst_expr.typ.clone()),
+                kind: sst::ExprKind::Reference(Box::new(sst_expr)),
+            }
+        }
     };
 
     if let Some(inferred) = &inferred {

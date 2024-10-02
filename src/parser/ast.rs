@@ -64,6 +64,7 @@ pub enum Expression {
     Variable(Ident),
     Group(Box<Expression>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
+    Reference(Box<Expression>),
 }
 
 #[derive(Debug)]

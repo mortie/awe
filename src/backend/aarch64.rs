@@ -401,6 +401,23 @@ fn gen_expr_to<W: Write>(
             frame.maybe_pop_temp(lhs_var);
             write!(&mut frame.w, "\t// </Expression::BinOp>\n")?;
         }
+
+        sst::ExprKind::Reference(expr) => {
+            write!(&mut frame.w, "\t// <Expression::Reference>\n")?;
+            let var = gen_expr(frame, expr)?;
+            let MaybeTemp::NonTemp(var) = var else {
+                return Err(CodegenError::ReferenceToTemporary);
+            };
+
+            let o = frame_offset(&var);
+            if o < 0 {
+                write!(&mut frame.w, "\tsub x0, sp, {}\n", -o)?;
+            } else {
+                write!(&mut frame.w, "\tadd x0, sp, {}\n", o)?;
+            }
+            gen_store(frame, loc, 0)?;
+            write!(&mut frame.w, "\t// </Expression::Reference>\n")?;
+        }
     }
 
     Ok(())

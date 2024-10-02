@@ -329,9 +329,9 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
         if ch >= b'0' && ch <= b'9' {
             digit = ch - b'0';
         } else if ch >= b'a' && ch <= b'z' {
-            digit = ch - b'a';
+            digit = ch - b'a' + 10;
         } else if ch >= b'A' && ch <= b'Z' {
-            digit = ch - b'A';
+            digit = ch - b'A' + 10;
         } else {
             break;
         }
@@ -359,9 +359,7 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
         None => return Err(ParseError::number_literal_overflow(r)),
     };
 
-    let size: Option<ast::IntegerSize> = if r.peek_cmp_consume(b"b") {
-        Some(ast::IntegerSize::Byte)
-    } else if r.peek_cmp_consume(b"us") {
+    let size: Option<ast::IntegerSize> = if r.peek_cmp_consume(b"us") {
         Some(ast::IntegerSize::UShort)
     } else if r.peek_cmp_consume(b"ui") {
         Some(ast::IntegerSize::UInt)
@@ -541,13 +539,29 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
     Err(comb.err())
 }
 
+/// locator ::= '&'
+/// ExpressionPart ::= ExpressionAtom Locator*
+pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
+    let mut expr = expression_atom(r)?;
+
+    loop {
+        whitespace(r);
+        if r.peek_cmp_consume(b"&") {
+            let sub = Box::new(expr);
+            expr = ast::Expression::Reference(sub);
+        } else {
+            return Ok(expr);
+        }
+    }
+}
+
 /// BinOp ::= '+' | '-' | '*' | '/' | '==' | '!=' | '>' | '>=' | '<' | '<='
 /// Expression ::=
-///     ExpressionAtom BinOp Expression |
-///     ExpressionAtom Expression |
-///     ExpressionAtom
+///     ExpressionPart BinOp Expression |
+///     ExpressionPart Expression |
+///     ExpressionPart
 pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
-    let expr = expression_atom(r)?;
+    let expr = expression_part(r)?;
 
     whitespace(r);
     let binop = if r.peek_cmp_consume(b"+") {
