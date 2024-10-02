@@ -188,6 +188,7 @@ struct Types {
     float: Rc<sst::Type>,
     double: Rc<sst::Type>,
     voidptr: Rc<sst::Type>,
+    byteptr: Rc<sst::Type>,
 }
 
 struct Context {
@@ -219,6 +220,7 @@ impl Context {
         ctx.add_type(ctx.types.ulong.clone());
         ctx.add_type(ctx.types.float.clone());
         ctx.add_type(ctx.types.double.clone());
+        ctx.add_type(ctx.types.byteptr.clone());
         ctx.add_type(ctx.types.voidptr.clone());
 
         ctx
@@ -458,7 +460,7 @@ fn analyze_literal(
             let mut frame = scope.frame.borrow_mut();
             let sc = frame.ctx.add_string(str.clone());
             Ok(sst::Expression {
-                typ: frame.ctx.types.voidptr.clone(),
+                typ: frame.ctx.types.byteptr.clone(),
                 kind: sst::ExprKind::Literal(sst::Literal::String(sc)),
             })
         }
@@ -546,10 +548,11 @@ fn analyze_expression(
 
         ast::Expression::BinOp(lhs, op, rhs) => {
             let (sst_op, is_bool, flip) = match op {
-                ast::BinOp::Add => (sst::BinOp::Add, false, false),
-                ast::BinOp::Sub => (sst::BinOp::Sub, false, false),
                 ast::BinOp::Mul => (sst::BinOp::Mul, false, false),
                 ast::BinOp::Div => (sst::BinOp::Div, false, false),
+                ast::BinOp::Mod => (sst::BinOp::Mod, false, false),
+                ast::BinOp::Add => (sst::BinOp::Add, false, false),
+                ast::BinOp::Sub => (sst::BinOp::Sub, false, false),
                 ast::BinOp::Eq => (sst::BinOp::Eq, true, false),
                 ast::BinOp::Neq => (sst::BinOp::Neq, true, false),
                 ast::BinOp::Lt => (sst::BinOp::Lt, true, false),
@@ -796,10 +799,11 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         })
     };
 
+    let byte = primitive("byte", 1, sst::Primitive::UInt);
     let void = primitive("void", 0, sst::Primitive::Void);
     let types = Types {
         void: void.clone(),
-        byte: primitive("byte", 1, sst::Primitive::UInt),
+        byte: byte.clone(),
         bool: primitive("bool", 1, sst::Primitive::UInt),
         short: primitive("short", 2, sst::Primitive::Int),
         ushort: primitive("ushort", 2, sst::Primitive::UInt),
@@ -809,6 +813,12 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         ulong: primitive("ulong", 8, sst::Primitive::UInt),
         float: primitive("float", 4, sst::Primitive::Float),
         double: primitive("double", 8, sst::Primitive::Float),
+        byteptr: Rc::new(sst::Type {
+            name: Rc::new("ptr[byte]".to_owned()),
+            size: 8,
+            align: 8,
+            kind: sst::TypeKind::Pointer(byte),
+        }),
         voidptr: Rc::new(sst::Type {
             name: Rc::new("ptr[void]".to_owned()),
             size: 8,

@@ -82,10 +82,11 @@ pub enum Literal {
 
 #[derive(Debug, Copy, Clone)]
 pub enum BinOp {
-    Add,
-    Sub,
     Mul,
     Div,
+    Mod,
+    Add,
+    Sub,
     Eq,
     Neq,
     Lt,

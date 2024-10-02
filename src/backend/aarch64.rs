@@ -255,13 +255,20 @@ fn gen_binop<W: Write>(
 
     let w = &mut frame.w;
     match op {
-        sst::BinOp::Add => write!(w, "\tadd {r}0, {r}0, {r}1\n"),
-        sst::BinOp::Sub => write!(w, "\tsub {r}0, {r}0, {r}1\n"),
         sst::BinOp::Mul => write!(w, "\tmul {r}0, {r}0, {r}1\n"),
         sst::BinOp::Div => match signed {
             true => write!(w, "\tsdiv {r}0, {r}0, {r}1\n"),
             false => write!(w, "\tudiv {r}0, {r}0, {r}1\n"),
         },
+        sst::BinOp::Mod => {
+            match signed {
+                true => write!(w, "\tsdiv {r}2, {r}0, {r}1\n"),
+                false => write!(w, "\tudiv {r}2, {r}0, {r}1\n"),
+            }?;
+            write!(w, "\tmsub {r}0, {r}2, {r}1, {r}0\n")
+        }
+        sst::BinOp::Add => write!(w, "\tadd {r}0, {r}0, {r}1\n"),
+        sst::BinOp::Sub => write!(w, "\tsub {r}0, {r}0, {r}1\n"),
 
         sst::BinOp::Eq => {
             write!(w, "\tcmp {r}0, {r}1\n")?;

@@ -43,10 +43,11 @@ pub enum LiteralExpr {
 
 #[derive(Debug)]
 pub enum BinOp {
-    Add,
-    Sub,
     Mul,
     Div,
+    Mod,
+    Add,
+    Sub,
     Eq,
     Neq,
     Lt,

@@ -562,7 +562,7 @@ pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
     Ok(expr)
 }
 
-/// MulLevelOp ::= '*' | '/'
+/// MulLevelOp ::= '*' | '/' | '%'
 /// MulLevelExpr ::= ExpressionPart (MulLevelOp ExpressionPart)*
 pub fn mul_level_expr(r: &mut Reader) -> Result<ast::Expression> {
     let sub = |r: &mut Reader| expression_part(r);
@@ -574,6 +574,8 @@ pub fn mul_level_expr(r: &mut Reader) -> Result<ast::Expression> {
             ast::BinOp::Mul
         } else if r.peek_cmp_consume(b"/") {
             ast::BinOp::Div
+        } else if r.peek_cmp_consume(b"%") {
+            ast::BinOp::Mod
         } else {
             return Ok(lhs);
         };
