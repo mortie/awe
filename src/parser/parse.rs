@@ -466,6 +466,25 @@ pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
     Ok(ast::Expression::FuncCall(ident, exprs))
 }
 
+/// CastExpr ::= TypeSpec '(' Expression ')'
+pub fn cast_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let typ = type_spec(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b"(") {
+        return Err(ParseError::expected_char(r, b'('));
+    }
+
+    let expr = expression(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b")") {
+        return Err(ParseError::expected_char(r, b')'));
+    }
+
+    Ok(ast::Expression::Cast(typ, Box::new(expr)))
+}
+
 /// AssignExpr ::= Ident '=' Expression
 pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = identifier(r)?;
@@ -522,6 +541,7 @@ pub fn group_expr(r: &mut Reader) -> Result<ast::Expression> {
 /// ExpressionAtom ::=
 ///     LiteralExpr |
 ///     FuncCallExpr |
+///     CastExpr |
 ///     AssignExpr |
 ///     UninitializedExpr |
 ///     GroupExpr |
@@ -531,6 +551,7 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
 
     try_parse!(comb, literal_expr);
     try_parse!(comb, func_call_expr);
+    try_parse!(comb, cast_expr);
     try_parse!(comb, assign_expr);
     try_parse!(comb, uninitialized_expr);
     try_parse!(comb, group_expr);

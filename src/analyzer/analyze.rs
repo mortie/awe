@@ -17,6 +17,8 @@ pub enum AnalysisError {
     BadIntegerLiteral(i128),
     BadTypeParameters,
     NonVoidFunctionMustReturn,
+    BadCast(Rc<sst::Type>, Rc<sst::Type>),
+
     FunctionCtx(Rc<String>, Box<AnalysisError>),
 
     // Unimplemented is for code that's a work in progress.
@@ -64,12 +66,13 @@ impl<'a> Scope<'a> {
     }
 
     fn from_parent(parent: Rc<Scope<'a>>) -> Rc<Self> {
+        let offset = *parent.offset.borrow();
         Rc::new(Self {
             frame: parent.frame.clone(),
             parent: Some(parent),
             vars: RefCell::new(HashMap::new()),
             types: RefCell::new(HashMap::new()),
-            offset: RefCell::new(0),
+            offset: RefCell::new(offset),
             props: RefCell::new(ScopeProps::new()),
         })
     }
@@ -475,7 +478,92 @@ fn analyze_literal(
     }
 }
 
-fn analyze_expression(
+fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
+    let is_integral = |x: &sst::TypeKind| match x {
+        sst::TypeKind::Primitive(sst::Primitive::Int) => true,
+        sst::TypeKind::Primitive(sst::Primitive::UInt) => true,
+        _ => false,
+    };
+
+    let is_pointer = |x: &sst::TypeKind| match x {
+        sst::TypeKind::Pointer(..) => true,
+        _ => false,
+    };
+
+    if is_integral(&from.kind) && is_integral(&to.kind) {
+        return Ok(());
+    }
+
+    if is_pointer(&from.kind) && is_pointer(&to.kind) {
+        return Ok(());
+    }
+
+    Err(AnalysisError::BadCast(from.clone(), to.clone()))
+}
+
+fn analyze_func_call(
+    scope: Rc<Scope>,
+    ident: &ast::QualifiedIdent,
+    params: &Vec<ast::Expression>,
+) -> Result<sst::Expression> {
+    let maybe_sig = scope.get_func_sig(ident);
+
+    // A function might be a cast,
+    // since casts and function calls can't be properly distinguished by the parser
+    if let Err(err) = maybe_sig {
+        if params.len() != 1 {
+            return Err(err);
+        }
+
+        let spec = ast::TypeSpec {
+            ident: ident.clone(),
+            params: Vec::new(),
+        };
+
+        let Ok(typ) = scope.get_type(&spec) else {
+            return Err(err);
+        };
+
+        let sst_expr = analyze_expression_non_typechecked(
+            scope, &params[0], Some(typ.clone()))?;
+
+        if Rc::ptr_eq(&sst_expr.typ, &typ) {
+            return Ok(sst_expr);
+        }
+
+        check_cast(&sst_expr.typ, &typ)?;
+        return Ok(sst::Expression{
+            typ,
+            kind: sst::ExprKind::Cast(Box::new(sst_expr)),
+        });
+    }
+
+    let sig = maybe_sig?;
+
+    let len = sig.params.fields.len();
+    if len != params.len() {
+        return Err(AnalysisError::BadParamCount(len, params.len()));
+    }
+
+    let mut exprs = Vec::<sst::Expression>::new();
+    exprs.reserve(len);
+    for i in 0..len {
+        exprs.push(analyze_expression(
+            scope.clone(),
+            &params[i],
+            Some(sig.params.fields[i].typ.clone()),
+        )?);
+    }
+
+    scope.props.borrow_mut().is_leaf = false;
+
+    Ok(sst::Expression {
+        typ: sig.ret.clone(),
+        kind: sst::ExprKind::FuncCall(sig, exprs),
+    })
+}
+
+fn analyze_expression_non_typechecked(
     scope: Rc<Scope>,
     expr: &ast::Expression,
     inferred: Option<Rc<sst::Type>>,
@@ -486,28 +574,21 @@ fn analyze_expression(
         }
 
         ast::Expression::FuncCall(ident, params) => {
-            let sig = scope.get_func_sig(ident)?;
+            analyze_func_call(scope, ident, params)?
+        }
 
-            let len = sig.params.fields.len();
-            if len != params.len() {
-                return Err(AnalysisError::BadParamCount(len, params.len()));
-            }
-
-            let mut exprs = Vec::<sst::Expression>::new();
-            exprs.reserve(len);
-            for i in 0..len {
-                exprs.push(analyze_expression(
-                    scope.clone(),
-                    &params[i],
-                    Some(sig.params.fields[i].typ.clone()),
-                )?);
-            }
-
-            scope.props.borrow_mut().is_leaf = false;
-
-            sst::Expression {
-                typ: sig.ret.clone(),
-                kind: sst::ExprKind::FuncCall(sig, exprs),
+        ast::Expression::Cast(spec, expr) => {
+            let typ = scope.get_type(spec)?;
+            let sst_expr = analyze_expression_non_typechecked(
+                scope, expr, Some(typ.clone()))?;
+            if Rc::ptr_eq(&sst_expr.typ, &typ) {
+                sst_expr
+            } else {
+                check_cast(&sst_expr.typ, &typ)?;
+                sst::Expression {
+                    typ,
+                    kind: sst::ExprKind::Cast(Box::new(sst_expr)),
+                }
             }
         }
 
@@ -544,7 +625,9 @@ fn analyze_expression(
             }
         }
 
-        ast::Expression::Group(expr) => analyze_expression(scope, expr, inferred.clone())?,
+        ast::Expression::Group(expr) => {
+            analyze_expression_non_typechecked(scope, expr, inferred.clone())?
+        }
 
         ast::Expression::BinOp(lhs, op, rhs) => {
             let (sst_op, is_bool, flip) = match op {
@@ -562,11 +645,16 @@ fn analyze_expression(
             };
 
             let (subexpr_type, expr_type) = match is_bool {
-                false => (inferred.clone(), inferred.clone()),
+                false => (inferred.clone(), None),
                 true => (None, Some(scope.frame.borrow().ctx.types.bool.clone())),
             };
 
-            let mut sst_lhs = Box::new(analyze_expression(scope.clone(), lhs, subexpr_type)?);
+            let mut sst_lhs = Box::new(analyze_expression_non_typechecked(
+                scope.clone(),
+                lhs,
+                subexpr_type,
+            )?);
+
             let mut sst_rhs = Box::new(analyze_expression(
                 scope.clone(),
                 rhs,
@@ -594,13 +682,23 @@ fn analyze_expression(
         }
     };
 
+    Ok(expr)
+}
+
+fn analyze_expression(
+    scope: Rc<Scope>,
+    expr: &ast::Expression,
+    inferred: Option<Rc<sst::Type>>,
+) -> Result<sst::Expression> {
+    let sst_expr = analyze_expression_non_typechecked(scope, expr, inferred.clone())?;
+
     if let Some(inferred) = &inferred {
-        if !Rc::ptr_eq(inferred, &expr.typ) {
-            return Err(AnalysisError::TypeConflict(inferred.clone(), expr.typ));
+        if !Rc::ptr_eq(inferred, &sst_expr.typ) {
+            return Err(AnalysisError::TypeConflict(inferred.clone(), sst_expr.typ));
         }
     }
 
-    Ok(expr)
+    Ok(sst_expr)
 }
 
 fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
@@ -652,7 +750,17 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
 
         ast::Statement::DebugPrint(expr) => {
             let sst_expr = analyze_expression(scope, expr, None)?;
-            eprintln!("DEBUG: Expression has type '{}'", sst_expr.typ.name);
+            eprintln!(
+                "DEBUG: Expression has type '{}', size {}",
+                sst_expr.typ.name,
+                sst_expr.typ.size,
+            );
+            match sst_expr.kind {
+                sst::ExprKind::Variable(var) => {
+                    eprintln!(" -> Frame offset: {}", var.frame_offset);
+                }
+                _ => (),
+            }
             Ok(sst::Statement::Empty)
         }
 

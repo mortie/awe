@@ -60,6 +60,7 @@ pub enum BinOp {
 pub enum Expression {
     Literal(LiteralExpr),
     FuncCall(QualifiedIdent, Vec<Expression>),
+    Cast(TypeSpec, Box<Expression>),
     Assignment(Ident, Box<Expression>),
     Uninitialized(Option<TypeSpec>),
     Variable(Ident),

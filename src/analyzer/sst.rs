@@ -97,6 +97,7 @@ pub enum BinOp {
 pub enum ExprKind {
     Literal(Literal),
     FuncCall(Rc<FuncSignature>, Vec<Expression>),
+    Cast(Box<Expression>),
     Assignment(Rc<LocalVar>, Box<Expression>),
     Uninitialized,
     Variable(Rc<LocalVar>),

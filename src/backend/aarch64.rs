@@ -189,6 +189,7 @@ fn gen_load<W: Write>(frame: &mut Frame<W>, reg: u8, src: &sst::LocalVar) -> Res
 
     let w = &mut frame.w;
     match size {
+        0 => return Ok(()),
         1 => write!(w, "\tldr{}b w{}, [sp, {}]\n", s, reg, soffset),
         2 => write!(w, "\tldr{}h w{}, [sp, {}]\n", s, reg, soffset),
         4 => write!(w, "\tldr w{}, [sp, {}]\n", reg, soffset),
@@ -205,6 +206,7 @@ fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> R
 
     let w = &mut frame.w;
     match size {
+        0 => return Ok(()),
         1 => write!(w, "\tstrb w{}, [sp, {}]\n", reg, doffset),
         2 => write!(w, "\tstrh w{}, [sp, {}]\n", reg, doffset),
         4 => write!(w, "\tstr w{}, [sp, {}]\n", reg, doffset),
@@ -277,7 +279,7 @@ fn gen_binop<W: Write>(
 
         sst::BinOp::Neq => {
             write!(w, "\tcmp {r}0, {r}1\n")?;
-            write!(w, "\tcset {r}0, zr, zr, NE\n")
+            write!(w, "\tcset {r}0, NE\n")
         }
 
         sst::BinOp::Lt => {
@@ -324,7 +326,8 @@ fn gen_expr_to<W: Write>(
 ) -> Result<()> {
     match &expr.kind {
         sst::ExprKind::Literal(literal) => {
-            write!(&mut frame.w, "\t// <Expression::Literal {:?}>\n", literal)?;
+            write!(&mut frame.w, "\t// <Expression::Literal {} {:?}>\n",
+                expr.typ.name, literal)?;
             match literal {
                 sst::Literal::Integer(num) => {
                     gen_integer(frame, loc, *num)?;
@@ -377,6 +380,19 @@ fn gen_expr_to<W: Write>(
             frame.pop_temp(return_var);
             frame.pop_temp(aligned);
             write!(&mut frame.w, "\t// </Expression::FuncCall>\n")?;
+        }
+
+        sst::ExprKind::Cast(sub) => {
+            write!(&mut frame.w, "\t// <Expression::Cast {} -> {}>\n",
+                sub.typ.name, loc.typ.name)?;
+            let subloc = gen_expr(frame, sub)?;
+            if subloc.var().typ.size < loc.typ.size {
+                write!(&mut frame.w, "\tmov x0, 0\n")?;
+            }
+            gen_load(frame, 0, subloc.var())?;
+            gen_store(frame, loc, 0)?;
+            frame.maybe_pop_temp(subloc);
+            write!(&mut frame.w, "\t// </Expression::Cast>\n")?;
         }
 
         sst::ExprKind::Assignment(var, expr) => {
@@ -432,7 +448,10 @@ fn gen_expr_to<W: Write>(
 
 fn gen_expr<W: Write>(frame: &mut Frame<W>, expr: &sst::Expression) -> Result<MaybeTemp> {
     match &expr.kind {
-        sst::ExprKind::Variable(var) => Ok(MaybeTemp::NonTemp(var.clone())),
+        sst::ExprKind::Variable(var) => {
+            write!(&mut frame.w, "\t// <Expression::Variable />\n")?;
+            Ok(MaybeTemp::NonTemp(var.clone()))
+        }
 
         _ => {
             let temp = frame.push_temp(expr.typ.clone());
