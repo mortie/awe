@@ -540,7 +540,7 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
 }
 
 /// locator ::= '&'
-/// ExpressionPart ::= ExpressionAtom Locator*
+/// ExpressionPart ::= ExpressionAtom Locator* Expression?
 pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
     let mut expr = expression_atom(r)?;
 
@@ -550,59 +550,88 @@ pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
             let sub = Box::new(expr);
             expr = ast::Expression::Reference(sub);
         } else {
-            return Ok(expr);
+            break;
         }
-    }
-}
-
-/// BinOp ::= '+' | '-' | '*' | '/' | '==' | '!=' | '>' | '>=' | '<' | '<='
-/// Expression ::=
-///     ExpressionPart BinOp Expression |
-///     ExpressionPart Expression |
-///     ExpressionPart
-pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
-    let expr = expression_part(r)?;
-
-    whitespace(r);
-    let binop = if r.peek_cmp_consume(b"+") {
-        Some(ast::BinOp::Add)
-    } else if r.peek_cmp_consume(b"-") {
-        Some(ast::BinOp::Sub)
-    } else if r.peek_cmp_consume(b"*") {
-        Some(ast::BinOp::Mul)
-    } else if r.peek_cmp_consume(b"/") {
-        Some(ast::BinOp::Div)
-    } else if r.peek_cmp_consume(b"==") {
-        Some(ast::BinOp::Eq)
-    } else if r.peek_cmp_consume(b"!=") {
-        Some(ast::BinOp::Neq)
-    } else if r.peek_cmp_consume(b"<=") {
-        Some(ast::BinOp::Leq)
-    } else if r.peek_cmp_consume(b"<") {
-        Some(ast::BinOp::Lt)
-    } else if r.peek_cmp_consume(b">=") {
-        Some(ast::BinOp::Geq)
-    } else if r.peek_cmp_consume(b">") {
-        Some(ast::BinOp::Gt)
-    } else {
-        None
-    };
-
-    if let Some(binop) = binop {
-        let rhs = Box::new(expression(r)?);
-        return Ok(ast::Expression::BinOp(Box::new(expr), binop, rhs));
     }
 
     // Concatenative multiplication
-    let point = r.tell();
-    if let Ok(rhs) = expression(r) {
-        let rhs = Box::new(rhs);
-        return Ok(ast::Expression::BinOp(Box::new(expr), ast::BinOp::Mul, rhs));
-    } else {
-        r.seek(point);
+    if let Ok(rhs) = expression_part(r) {
+        expr = ast::Expression::BinOp(Box::new(expr), ast::BinOp::Mul, Box::new(rhs));
     }
 
     Ok(expr)
+}
+
+/// MulLevelOp ::= '*' | '/'
+/// MulLevelExpr ::= ExpressionPart (MulLevelOp ExpressionPart)*
+pub fn mul_level_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let sub = |r: &mut Reader| expression_part(r);
+    let mut lhs = sub(r)?;
+
+    loop {
+        whitespace(r);
+        let binop = if r.peek_cmp_consume(b"*") {
+            ast::BinOp::Mul
+        } else if r.peek_cmp_consume(b"/") {
+            ast::BinOp::Div
+        } else {
+            return Ok(lhs);
+        };
+
+        lhs = ast::Expression::BinOp(Box::new(lhs), binop, Box::new(sub(r)?));
+    }
+}
+
+/// AddLevelOp ::= ('+' | '-')
+/// AddLevelExpr ::= MulLevelExpr (AddLevelOp MulLevelExpr)*
+pub fn add_level_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let sub = |r: &mut Reader| mul_level_expr(r);
+    let mut lhs = sub(r)?;
+
+    loop {
+        let binop = if r.peek_cmp_consume(b"+") {
+            ast::BinOp::Add
+        } else if r.peek_cmp_consume(b"-") {
+            ast::BinOp::Sub
+        } else {
+            return Ok(lhs);
+        };
+
+        lhs = ast::Expression::BinOp(Box::new(lhs), binop, Box::new(sub(r)?))
+    }
+}
+
+/// EqLevelOp = '==' | '!=' | '<' | '<=' | '>' | '>='
+/// EqLevelExpr ::= AddLevelExpr (EqLevelOp Expression)?
+pub fn eq_level_expr(r: &mut Reader) -> Result<ast::Expression> {
+    let sub = |r: &mut Reader| add_level_expr(r);
+    let mut lhs = sub(r)?;
+
+    loop {
+        whitespace(r);
+        let binop = if r.peek_cmp_consume(b"==") {
+            ast::BinOp::Eq
+        } else if r.peek_cmp_consume(b"!=") {
+            ast::BinOp::Neq
+        } else if r.peek_cmp_consume(b"<=") {
+            ast::BinOp::Leq
+        } else if r.peek_cmp_consume(b"<") {
+            ast::BinOp::Lt
+        } else if r.peek_cmp_consume(b">=") {
+            ast::BinOp::Geq
+        } else if r.peek_cmp_consume(b">") {
+            ast::BinOp::Gt
+        } else {
+            return Ok(lhs);
+        };
+
+        lhs = ast::Expression::BinOp(Box::new(lhs), binop, Box::new(sub(r)?))
+    }
+}
+
+/// Expression ::= EqLevelExpr
+pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
+    eq_level_expr(r)
 }
 
 /// ElsePart ::= 'else' Statement
