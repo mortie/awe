@@ -742,6 +742,17 @@ fn block_stmt(r: &mut Reader) -> Result<ast::Statement> {
     Ok(ast::Statement::Block(block(r)?))
 }
 
+/// Debugger ::= 'debugger' ';'
+fn debugger_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "debugger" {
+        return Err(ParseError::bad_keyword(r));
+    }
+
+    semicolon(r)?;
+    Ok(ast::Statement::Debugger)
+}
+
 /// Statement ::=
 ///     IfStmt |
 ///     LoopStmt |
@@ -751,6 +762,7 @@ fn block_stmt(r: &mut Reader) -> Result<ast::Statement> {
 ///     DebugPrintStmt |
 ///     VarDeclStmt |
 ///     BlockStmt |
+///     DebuggerStmt |
 ///     ExpressionStmt
 pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
     let mut comb = Combinator::new(r);
@@ -763,6 +775,7 @@ pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
     try_parse!(comb, debug_print_stmt);
     try_parse!(comb, var_decl_stmt);
     try_parse!(comb, block_stmt);
+    try_parse!(comb, debugger_stmt);
     try_parse!(comb, expression_stmt);
 
     Err(comb.err())

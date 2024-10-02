@@ -675,6 +675,8 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             Ok(sst::Statement::Block(sst_stmts))
         }
 
+        ast::Statement::Debugger => Ok(sst::Statement::Debugger),
+
         ast::Statement::Expression(expr) => {
             let sst_expr = analyze_expression(scope, expr, None)?;
             Ok(sst::Statement::Expression(Box::new(sst_expr)))

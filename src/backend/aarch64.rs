@@ -526,6 +526,12 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             write!(&mut frame.w, "\t// </Statement::Block>\n")?;
         }
 
+        sst::Statement::Debugger => {
+            write!(&mut frame.w, "\t// <Statement::Debugger>\n")?;
+            write!(&mut frame.w, "\tbrk 0\n")?;
+            write!(&mut frame.w, "\t// </Statement::Debugger>\n")?;
+        }
+
         sst::Statement::Expression(expr) => {
             write!(&mut frame.w, "\t// <Statement::Expression>\n")?;
             let local = frame.push_temp(expr.typ.clone());

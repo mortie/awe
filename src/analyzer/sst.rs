@@ -117,6 +117,7 @@ pub enum Statement {
     Break,
     VarDecl(Rc<LocalVar>, Box<Expression>),
     Block(Vec<Statement>),
+    Debugger,
     Expression(Box<Expression>),
     Empty,
 }

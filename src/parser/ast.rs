@@ -77,6 +77,7 @@ pub enum Statement {
     DebugPrint(Box<Expression>),
     VarDecl(Ident, Box<Expression>),
     Block(Block),
+    Debugger,
     Expression(Box<Expression>),
 }
 
