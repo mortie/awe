@@ -738,11 +738,15 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
 
         ast::Statement::Loop(body) => {
             let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
-            // If we don't know if we always return after parsing the body,
+            // If we don't know whether we always return after parsing the body,
             // we *will* always return (or never break),
-            // because that means there's no break statement in the body
+            // because that means there's no break statement in the body.
+            // If we know we won't always return, that's due to a break;
+            // after the loop, we go back to not knowing.
             if scope.props.borrow().always_returns == None {
                 scope.props.borrow_mut().always_returns = Some(true);
+            } else if scope.props.borrow().always_returns == Some(false) {
+                scope.props.borrow_mut().always_returns = None;
             }
             Ok(sst::Statement::Loop(sst_body))
         }
