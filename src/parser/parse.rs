@@ -4,13 +4,13 @@ use std::rc::Rc;
 use super::ast;
 use super::reader::{Reader, SeekPoint};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum ErrorKind {
+    Inapplicable,
+    Missing(&'static str),
     UnexpectedEOF,
     UnexpectedChar(u8),
     ExpectedChar(u8),
-    BadKeyword,
-    NoMatchingParse,
     BadDigit(u8),
     NumberLiteralOverflow,
     BadEscape(u8),
@@ -20,11 +20,11 @@ pub enum ErrorKind {
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
+            ErrorKind::Inapplicable => write!(f, "No matching parse"),
+            ErrorKind::Missing(s) => write!(f, "Required {s} is missing"),
             ErrorKind::UnexpectedEOF => write!(f, "Unexpected EOF"),
             ErrorKind::UnexpectedChar(ch) => write!(f, "Unexpected char '{}'", ch as char),
             ErrorKind::ExpectedChar(ch) => write!(f, "Expected '{}'", ch as char),
-            ErrorKind::BadKeyword => write!(f, "Expected a keyword"),
-            ErrorKind::NoMatchingParse => write!(f, "No matching parse"),
             ErrorKind::BadDigit(ch) => write!(f, "Digit '{}' inappropriate for radix", ch as char),
             ErrorKind::NumberLiteralOverflow => write!(f, "Number literal overflow"),
             ErrorKind::BadEscape(ch) => write!(f, "Bad escape sequence '\\{}'", ch as char),
@@ -55,6 +55,10 @@ impl ParseError {
         }
     }
 
+    fn inapplicable(r: &Reader) -> Self {
+        Self::new(r, ErrorKind::Inapplicable)
+    }
+
     fn unexpected_eof(r: &Reader) -> Self {
         Self::new(r, ErrorKind::UnexpectedEOF)
     }
@@ -73,10 +77,6 @@ impl ParseError {
 
     fn expected_char(r: &Reader, ch: u8) -> Self {
         Self::new(r, ErrorKind::ExpectedChar(ch))
-    }
-
-    fn bad_keyword(r: &Reader) -> Self {
-        Self::new(r, ErrorKind::BadKeyword)
     }
 
     fn unexpected_peek(r: &Reader) -> Self {
@@ -102,6 +102,20 @@ impl ParseError {
 
 type Result<T> = std::result::Result<T, ParseError>;
 
+fn require<T>(thing: &'static str, res: Result<T>) -> Result<T> {
+    if let Err(err) = res {
+        if err.kind == ErrorKind::Inapplicable {
+            return Err(ParseError{
+                line: err.line,
+                col: err.col,
+                kind: ErrorKind::Missing(thing),
+            });
+        }
+    }
+
+    res
+}
+
 struct Combinator<'a, 'b> {
     r: &'a mut Reader<'b>,
     error: Option<ParseError>,
@@ -119,7 +133,12 @@ impl<'a, 'b> Combinator<'a, 'b> {
         }
     }
 
-    fn consider_error(&mut self, new_err: ParseError) {
+    fn consider_error(&mut self, new_err: ParseError, f: &str) {
+        if new_err.kind == ErrorKind::Inapplicable {
+            return;
+        }
+
+        eprintln!("Warn: {}:{}: {} ({})", new_err.line, new_err.col, new_err.kind, f);
         let Some(err) = self.error else {
             self.error = Some(new_err);
             return;
@@ -137,7 +156,7 @@ impl<'a, 'b> Combinator<'a, 'b> {
         if let Some(err) = self.error {
             err
         } else {
-            ParseError::new(self.r, ErrorKind::NoMatchingParse)
+            ParseError::new(self.r, ErrorKind::Inapplicable)
         }
     }
 }
@@ -147,7 +166,7 @@ macro_rules! try_parse {
         $c.r.seek($c.point);
         match $func($c.r) {
             Ok(ok) => return Ok(ok),
-            Err(err) => $c.consider_error(err),
+            Err(err) => $c.consider_error(err, stringify!($func)),
         };
     };
 }
@@ -158,6 +177,14 @@ fn is_alpha(ch: u8) -> bool {
 
 fn is_alnum(ch: u8) -> bool {
     is_alpha(ch) || (ch >= b'0' && ch <= b'9')
+}
+
+fn is_keyword(s: &str) -> bool {
+    s == "if" ||
+        s == "loop" ||
+        s == "while" ||
+        s == "break" ||
+        s == "return"
 }
 
 fn semicolon(r: &mut Reader) -> Result<()> {
@@ -205,7 +232,7 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
     };
 
     if !is_alpha(ch) && ch != b'_' {
-        return Err(ParseError::unexpected_char(r, ch));
+        return Err(ParseError::inapplicable(r));
     }
     ident.push(ch as char);
     r.consume();
@@ -235,7 +262,7 @@ pub fn qualified_ident(r: &mut Reader) -> Result<ast::QualifiedIdent> {
     loop {
         whitespace(r);
         if r.peek_cmp_consume(b"::") {
-            idents.push(identifier(r)?);
+            idents.push(require("identifier", identifier(r))?);
         } else {
             return Ok(idents);
         }
@@ -304,7 +331,7 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     };
 
     if ch < b'0' || ch > b'9' {
-        return Err(ParseError::unexpected_char(r, ch));
+        return Err(ParseError::inapplicable(r));
     }
 
     let radix: i128;
@@ -390,7 +417,7 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
 /// StringLiteral ::= '"' ([^"\\] | '\\"' | '\\t' '\\r' | '\\n') '"'
 pub fn string_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     if !r.peek_cmp_consume(b"\"") {
-        return Err(ParseError::expected_char(r, b'"'));
+        return Err(ParseError::inapplicable(r));
     }
 
     let mut bytes = Vec::<u8>::new();
@@ -439,7 +466,7 @@ pub fn bool_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     } else if keyword.as_str() == "false" {
         Ok(ast::LiteralExpr::Bool(false))
     } else {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 }
 
@@ -463,7 +490,7 @@ pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = qualified_ident(r)?;
 
     if !r.peek_cmp_consume(b"(") {
-        return Err(ParseError::unexpected_peek(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let exprs = expr_list(r)?;
@@ -481,7 +508,7 @@ pub fn cast_expr(r: &mut Reader) -> Result<ast::Expression> {
 
     whitespace(r);
     if !r.peek_cmp_consume(b"(") {
-        return Err(ParseError::expected_char(r, b'('));
+        return Err(ParseError::inapplicable(r));
     }
 
     let expr = expression(r)?;
@@ -497,10 +524,13 @@ pub fn cast_expr(r: &mut Reader) -> Result<ast::Expression> {
 /// AssignExpr ::= Ident '=' Expression
 pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = identifier(r)?;
+    if is_keyword(ident.as_str()) {
+        return Err(ParseError::inapplicable(r));
+    }
 
     whitespace(r);
     if !r.peek_cmp_consume(b"=") {
-        return Err(ParseError::unexpected_peek(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let expr = expression(r)?;
@@ -512,7 +542,7 @@ pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
 pub fn uninitialized_expr(r: &mut Reader) -> Result<ast::Expression> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "uninitialized" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     whitespace(r);
@@ -529,13 +559,17 @@ pub fn uninitialized_expr(r: &mut Reader) -> Result<ast::Expression> {
 /// VariableExpr ::= Ident
 pub fn variable_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = identifier(r)?;
+    if is_keyword(ident.as_str()) {
+        return Err(ParseError::inapplicable(r));
+    }
+
     Ok(ast::Expression::Variable(ident))
 }
 
 /// GroupExpr ::= '(' Expression ')'
 pub fn group_expr(r: &mut Reader) -> Result<ast::Expression> {
     if !r.peek_cmp_consume(b"(") {
-        return Err(ParseError::unexpected_peek(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let expr = expression(r)?;
@@ -670,7 +704,7 @@ pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
 fn else_part(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "else" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     Ok(statement(r)?)
@@ -680,11 +714,11 @@ fn else_part(r: &mut Reader) -> Result<ast::Statement> {
 fn if_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "if" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
-    let expr = Box::new(expression(r)?);
-    let body = Box::new(statement(r)?);
+    let expr = Box::new(require("expr", expression(r))?);
+    let body = Box::new(require("body", statement(r))?);
 
     whitespace(r);
     let point = r.tell();
@@ -700,7 +734,7 @@ fn if_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn loop_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "loop" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let body = Box::new(statement(r)?);
@@ -711,11 +745,11 @@ fn loop_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn while_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "while" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
-    let cond = expression(r)?;
-    let body = statement(r)?;
+    let cond = require("condition", expression(r))?;
+    let body = require("body", statement(r))?;
 
     // if cond {} else break;
     let if_not_cond_break = ast::Statement::If(
@@ -735,7 +769,7 @@ fn while_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "return" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     whitespace(r);
@@ -754,7 +788,7 @@ fn return_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn break_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "break" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     semicolon(r)?;
@@ -765,10 +799,10 @@ fn break_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn type_alias_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "type" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
-    let ident = identifier(r)?;
+    let ident = require("name", identifier(r))?;
 
     whitespace(r);
     if !r.peek_cmp_consume(b"=") {
@@ -784,10 +818,10 @@ fn type_alias_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn debug_print_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "debug" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
-    let expr = expression(r)?;
+    let expr = require("expression", expression(r))?;
     semicolon(r)?;
     Ok(ast::Statement::DebugPrint(Box::new(expr)))
 }
@@ -798,10 +832,10 @@ fn var_decl_stmt(r: &mut Reader) -> Result<ast::Statement> {
 
     whitespace(r);
     if !r.peek_cmp_consume(b":=") {
-        return Err(ParseError::unexpected_peek(r));
+        return Err(ParseError::inapplicable(r));
     }
 
-    let expr = expression(r)?;
+    let expr = require("expression", expression(r))?;
     semicolon(r)?;
     Ok(ast::Statement::VarDecl(name, Box::new(expr)))
 }
@@ -822,7 +856,7 @@ fn block_stmt(r: &mut Reader) -> Result<ast::Statement> {
 fn debugger_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "debugger" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     semicolon(r)?;
@@ -832,6 +866,7 @@ fn debugger_stmt(r: &mut Reader) -> Result<ast::Statement> {
 /// Statement ::=
 ///     IfStmt |
 ///     LoopStmt |
+///     WhileStmt |
 ///     ReturnStmt |
 ///     BreakStmt |
 ///     TypeAliasStmt |
@@ -863,7 +898,7 @@ pub fn block(r: &mut Reader) -> Result<ast::Block> {
     whitespace(r);
 
     if !r.peek_cmp_consume(b"{") {
-        return Err(ParseError::unexpected_peek(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let mut block = ast::Block::new();
@@ -884,7 +919,7 @@ pub fn field_decl(r: &mut Reader) -> Result<ast::FieldDecl> {
     whitespace(r);
 
     let point = r.tell();
-    let ident = identifier(r)?;
+    let ident = require("identifier", identifier(r))?;
     whitespace(r);
 
     if r.peek_n(0) == Some(b':') && r.peek_n(1) != Some(b':') {
@@ -930,7 +965,7 @@ pub fn field_decls(r: &mut Reader) -> Result<Vec<ast::FieldDecl>> {
 fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "struct" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let name = identifier(r)?;
@@ -954,10 +989,10 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
 fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "func" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
-    let ident = qualified_ident(r)?;
+    let ident = require("name", qualified_ident(r))?;
 
     if !r.peek_cmp_consume(b"(") {
         return Err(ParseError::expected_char(r, b'('));
@@ -984,7 +1019,7 @@ fn func_decl(r: &mut Reader) -> Result<ast::Declaration> {
 fn extern_func_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "extern" {
-        return Err(ParseError::bad_keyword(r));
+        return Err(ParseError::inapplicable(r));
     }
 
     let signature = func_signature(r)?;
