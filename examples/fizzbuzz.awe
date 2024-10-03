@@ -1,0 +1,40 @@
+extern func syscall_write(int, ptr[byte], ulong) long;
+
+func print_int(num: int) void {
+	next := num / 10;
+	if next != 0 {
+		print_int(next);
+	}
+
+	ch := byte(num % 10) + 48;
+	syscall_write(1, ch&, 1);
+}
+
+func fizzbuzz() void {
+	num := 1;
+	while num <= 100 {
+		x := true;
+
+		if num % 3 == 0 {
+			syscall_write(1, "fizz", 4);
+			x = false;
+		}
+
+		if num % 5 == 0 {
+			syscall_write(1, "buzz", 4);
+			x = false;
+		}
+
+		if x {
+			print_int(num);
+		}
+
+		syscall_write(1, "\n", 1);
+		num = num + 1;
+	}
+}
+
+func main() int {
+	fizzbuzz();
+	return 0;
+}

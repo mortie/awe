@@ -1,0 +1,11 @@
+func fib(num: int) int {
+	if num <= 1 {
+		return 1;
+	}
+
+	return fib(num - 1) + fib(num - 2);
+}
+
+func main() int {
+	return fib(40);
+}
