@@ -31,14 +31,14 @@ pub enum AnalysisError {
 type Result<T> = std::result::Result<T, AnalysisError>;
 
 struct ScopeProps {
-    always_returns: bool,
+    always_returns: Option<bool>,
     is_leaf: bool,
 }
 
 impl ScopeProps {
     fn new() -> Self {
         Self {
-            always_returns: false,
+            always_returns: None,
             is_leaf: true,
         }
     }
@@ -706,10 +706,31 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
         ast::Statement::If(cond, body, else_body) => {
             let bool = scope.frame.borrow().ctx.types.bool.clone();
             let sst_cond = Box::new(analyze_expression(scope.clone(), cond, Some(bool))?);
+
+            let ar_before = scope.props.borrow().always_returns;
+
+            scope.props.borrow_mut().always_returns = ar_before;
             let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
+            let ar_a = scope.props.borrow().always_returns;
+
+            scope.props.borrow_mut().always_returns = ar_before;
             let sst_else_body = match else_body {
-                Some(else_body) => Box::new(analyze_statement(scope, else_body)?),
+                Some(else_body) => Box::new(analyze_statement(scope.clone(), else_body)?),
                 None => Box::new(sst::Statement::Empty),
+            };
+            let ar_b = scope.props.borrow().always_returns;
+
+            scope.props.borrow_mut().always_returns = match (ar_a, ar_b) {
+                // If either side *knows* that it won't always return,
+                // we know we won't always return
+                (Some(false), ..) | (.., Some(false)) => Some(false),
+
+                // If both sides *know* thatt hey always return,
+                // we know we always return
+                (Some(true), Some(true)) => Some(true),
+
+                // Anything else is inconclusive
+                _ => None,
             };
 
             Ok(sst::Statement::If(sst_cond, sst_body, sst_else_body))
@@ -717,6 +738,12 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
 
         ast::Statement::Loop(body) => {
             let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
+            // If we don't know if we always return after parsing the body,
+            // we *will* always return (or never break),
+            // because that means there's no break statement in the body
+            if scope.props.borrow().always_returns == None {
+                scope.props.borrow_mut().always_returns = Some(true);
+            }
             Ok(sst::Statement::Loop(sst_body))
         }
 
@@ -736,11 +763,16 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
                 return Err(AnalysisError::TypeConflict(ret, void));
             }
 
-            scope.props.borrow_mut().always_returns = true;
+            if scope.props.borrow().always_returns.is_none() {
+                scope.props.borrow_mut().always_returns = Some(true);
+            }
             Ok(sst::Statement::Return(sst_expr))
         }
 
-        ast::Statement::Break => Ok(sst::Statement::Break),
+        ast::Statement::Break => {
+            scope.props.borrow_mut().always_returns = Some(false);
+            Ok(sst::Statement::Break)
+        }
 
         ast::Statement::TypeAlias(ident, spec) => {
             let typ = scope.get_type(spec)?;
@@ -778,9 +810,8 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
                 scope.props.borrow_mut().is_leaf = false;
             }
 
-            // TODO: This should really consider both branches of an if
-            if !subscope.props.borrow().always_returns {
-                scope.props.borrow_mut().always_returns = false;
+            if let Some(ar) = subscope.props.borrow().always_returns {
+                scope.props.borrow_mut().always_returns = Some(ar);
             }
 
             Ok(sst::Statement::Block(sst_stmts))
@@ -799,7 +830,7 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
     let mut sst_stmts = Vec::<sst::Statement>::new();
     for stmt in block {
         // Eliminate obviously dead code
-        if scope.props.borrow().always_returns {
+        if scope.props.borrow().always_returns == Some(true) {
             return Ok(sst_stmts);
         }
 
@@ -860,7 +891,7 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
         return_var,
         body: stmts,
         stack_size: frame.borrow().size,
-        always_returns: props.always_returns,
+        always_returns: props.always_returns == Some(true),
         is_leaf: props.is_leaf,
     });
     drop(props);
