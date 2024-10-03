@@ -160,6 +160,15 @@ fn is_alnum(ch: u8) -> bool {
     is_alpha(ch) || (ch >= b'0' && ch <= b'9')
 }
 
+fn semicolon(r: &mut Reader) -> Result<()> {
+    whitespace(r);
+    if !r.peek_cmp_consume(b";") {
+        return Err(ParseError::expected_char(r, b';'));
+    }
+
+    Ok(())
+}
+
 /// Comment ::= '#' [^\\n]*
 fn comment(r: &mut Reader) {
     r.consume(); // '#'
@@ -687,7 +696,7 @@ fn if_stmt(r: &mut Reader) -> Result<ast::Statement> {
     }
 }
 
-/// LoopStmt ::= 'loop' Statement?
+/// LoopStmt ::= 'loop' Statement
 fn loop_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "loop" {
@@ -698,13 +707,28 @@ fn loop_stmt(r: &mut Reader) -> Result<ast::Statement> {
     Ok(ast::Statement::Loop(body))
 }
 
-fn semicolon(r: &mut Reader) -> Result<()> {
-    whitespace(r);
-    if !r.peek_cmp_consume(b";") {
-        return Err(ParseError::expected_char(r, b';'));
+/// WhileStmt ::= 'while' Expression Statement
+fn while_stmt(r: &mut Reader) -> Result<ast::Statement> {
+    let keyword = identifier(r)?;
+    if keyword.as_str() != "while" {
+        return Err(ParseError::bad_keyword(r));
     }
 
-    Ok(())
+    let cond = expression(r)?;
+    let body = statement(r)?;
+
+    // if cond {} else break;
+    let if_not_cond_break = ast::Statement::If(
+        Box::new(cond),
+        Box::new(ast::Statement::Block(Vec::new())),
+        Some(Box::new(ast::Statement::Break)));
+
+    let block = ast::Statement::Block(vec![
+        if_not_cond_break,
+        body,
+    ]);
+
+    Ok(ast::Statement::Loop(Box::new(block)))
 }
 
 /// ReturnStmt ::= 'return' Expression? ';'
@@ -821,6 +845,7 @@ pub fn statement(r: &mut Reader) -> Result<ast::Statement> {
 
     try_parse!(comb, if_stmt);
     try_parse!(comb, loop_stmt);
+    try_parse!(comb, while_stmt);
     try_parse!(comb, return_stmt);
     try_parse!(comb, break_stmt);
     try_parse!(comb, type_alias_stmt);
