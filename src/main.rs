@@ -210,7 +210,7 @@ fn main() {
     let prog = match analyzer::analyze::program(&prog) {
         Ok(prog) => prog,
         Err(err) => {
-            eprintln!("{:?}", err);
+            eprintln!("{}", err);
             process::exit(1);
         }
     };

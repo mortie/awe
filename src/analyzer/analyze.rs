@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::fmt::{self, Display};
 
 use super::sst;
 use crate::parser::ast;
@@ -26,6 +27,35 @@ pub enum AnalysisError {
     // so it should always be allowed to be unused.
     #[allow(dead_code)]
     Unimplemented,
+}
+
+impl Display for AnalysisError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use AnalysisError::*;
+        match self {
+            UndeclaredVariable(name) => write!(f, "Undeclared variable: {name}"),
+            UndeclaredType(name) => write!(f, "Undeclared type: {name}"),
+            UndeclaredFunction(name) => write!(f, "Undeclared function: {name}"),
+            MultipleDefinitions(name) => write!(f, "Multiple definitions of {name}"),
+            TypeConflict(expected, actual) => {
+                write!(f, "Expected type {}, got {}", expected.name, actual.name)
+            }
+            InconclusiveInference => write!(f, "Inconclusive type inference"),
+            BadParamCount(expected, actual) => {
+                write!(f, "Expected {expected} params, got {actual}")
+            }
+            BadIntegerLiteral(num) => {
+                write!(f, "Integer literal {num} inappropriate in this context")
+            }
+            BadTypeParameters => write!(f, "Bad type parameters"),
+            NonVoidFunctionMustReturn => write!(f, "Non-void function must return a value"),
+            BadCast(from, to) => write!(f, "Illegal cast from {} to {}", from.name, to.name),
+
+            FunctionCtx(name, err) => write!(f, "In function {name}: {err}"),
+
+            Unimplemented => write!(f, "Feature not implemented"),
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, AnalysisError>;
