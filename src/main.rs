@@ -192,7 +192,7 @@ fn main() {
     }
 
     let str = fs::read_to_string(&in_path).unwrap();
-    let mut reader = parser::reader::Reader::new(str.as_bytes(), in_path.clone());
+    let mut reader = parser::reader::Reader::new(str.as_bytes());
 
     let prog = match parser::parse::program(&mut reader) {
         Ok(prog) => prog,

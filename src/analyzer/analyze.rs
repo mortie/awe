@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::fmt::{self, Display};
+use std::rc::Rc;
 
 use super::sst;
 use crate::parser::ast;
@@ -554,15 +554,14 @@ fn analyze_func_call(
             return Err(err);
         };
 
-        let sst_expr = analyze_expression_non_typechecked(
-            scope, &params[0], Some(typ.clone()))?;
+        let sst_expr = analyze_expression_non_typechecked(scope, &params[0], Some(typ.clone()))?;
 
         if Rc::ptr_eq(&sst_expr.typ, &typ) {
             return Ok(sst_expr);
         }
 
         check_cast(&sst_expr.typ, &typ)?;
-        return Ok(sst::Expression{
+        return Ok(sst::Expression {
             typ,
             kind: sst::ExprKind::Cast(Box::new(sst_expr)),
         });
@@ -603,14 +602,11 @@ fn analyze_expression_non_typechecked(
             analyze_literal(scope.clone(), literal, inferred.clone())?
         }
 
-        ast::Expression::FuncCall(ident, params) => {
-            analyze_func_call(scope, ident, params)?
-        }
+        ast::Expression::FuncCall(ident, params) => analyze_func_call(scope, ident, params)?,
 
         ast::Expression::Cast(spec, expr) => {
             let typ = scope.get_type(spec)?;
-            let sst_expr = analyze_expression_non_typechecked(
-                scope, expr, Some(typ.clone()))?;
+            let sst_expr = analyze_expression_non_typechecked(scope, expr, Some(typ.clone()))?;
             if Rc::ptr_eq(&sst_expr.typ, &typ) {
                 sst_expr
             } else {
@@ -818,8 +814,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             let sst_expr = analyze_expression(scope, expr, None)?;
             eprintln!(
                 "DEBUG: Expression has type '{}', size {}",
-                sst_expr.typ.name,
-                sst_expr.typ.size,
+                sst_expr.typ.name, sst_expr.typ.size,
             );
             match sst_expr.kind {
                 sst::ExprKind::Variable(var) => {

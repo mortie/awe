@@ -6,7 +6,6 @@ pub struct SeekPoint {
 }
 
 pub struct Reader<'a> {
-    pub filename: String,
     pub line: u32,
     pub col: u32,
     string: &'a [u8],
@@ -14,9 +13,8 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(string: &'a [u8], filename: String) -> Self {
+    pub fn new(string: &'a [u8]) -> Self {
         Self {
-            filename,
             line: 1,
             col: 1,
             string,

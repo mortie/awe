@@ -326,8 +326,11 @@ fn gen_expr_to<W: Write>(
 ) -> Result<()> {
     match &expr.kind {
         sst::ExprKind::Literal(literal) => {
-            write!(&mut frame.w, "\t// <Expression::Literal {} {:?}>\n",
-                expr.typ.name, literal)?;
+            write!(
+                &mut frame.w,
+                "\t// <Expression::Literal {} {:?}>\n",
+                expr.typ.name, literal
+            )?;
             match literal {
                 sst::Literal::Integer(num) => {
                     gen_integer(frame, loc, *num)?;
@@ -383,8 +386,11 @@ fn gen_expr_to<W: Write>(
         }
 
         sst::ExprKind::Cast(sub) => {
-            write!(&mut frame.w, "\t// <Expression::Cast {} -> {}>\n",
-                sub.typ.name, loc.typ.name)?;
+            write!(
+                &mut frame.w,
+                "\t// <Expression::Cast {} -> {}>\n",
+                sub.typ.name, loc.typ.name
+            )?;
             let subloc = gen_expr(frame, sub)?;
             if subloc.var().typ.size < loc.typ.size {
                 write!(&mut frame.w, "\tmov x0, 0\n")?;

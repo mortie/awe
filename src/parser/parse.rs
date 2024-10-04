@@ -105,7 +105,7 @@ type Result<T> = std::result::Result<T, ParseError>;
 fn require<T>(thing: &'static str, res: Result<T>) -> Result<T> {
     if let Err(err) = res {
         if err.kind == ErrorKind::Inapplicable {
-            return Err(ParseError{
+            return Err(ParseError {
                 line: err.line,
                 col: err.col,
                 kind: ErrorKind::Missing(thing),
@@ -138,7 +138,10 @@ impl<'a, 'b> Combinator<'a, 'b> {
             return;
         }
 
-        eprintln!("Warn: {}:{}: {} ({})", new_err.line, new_err.col, new_err.kind, f);
+        eprintln!(
+            "Warn: {}:{}: {} ({})",
+            new_err.line, new_err.col, new_err.kind, f
+        );
         let Some(err) = self.error else {
             self.error = Some(new_err);
             return;
@@ -180,11 +183,7 @@ fn is_alnum(ch: u8) -> bool {
 }
 
 fn is_keyword(s: &str) -> bool {
-    s == "if" ||
-        s == "loop" ||
-        s == "while" ||
-        s == "break" ||
-        s == "return"
+    s == "if" || s == "loop" || s == "while" || s == "break" || s == "return"
 }
 
 fn semicolon(r: &mut Reader) -> Result<()> {
@@ -755,12 +754,10 @@ fn while_stmt(r: &mut Reader) -> Result<ast::Statement> {
     let if_not_cond_break = ast::Statement::If(
         Box::new(cond),
         Box::new(ast::Statement::Block(Vec::new())),
-        Some(Box::new(ast::Statement::Break)));
+        Some(Box::new(ast::Statement::Break)),
+    );
 
-    let block = ast::Statement::Block(vec![
-        if_not_cond_break,
-        body,
-    ]);
+    let block = ast::Statement::Block(vec![if_not_cond_break, body]);
 
     Ok(ast::Statement::Loop(Box::new(block)))
 }
