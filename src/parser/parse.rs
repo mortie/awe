@@ -144,9 +144,7 @@ impl<'a, 'b> Combinator<'a, 'b> {
             return;
         };
 
-        if new_err.line > err.line ||
-            (new_err.line == err.line && new_err.col > err.col)
-        {
+        if new_err.line > err.line || (new_err.line == err.line && new_err.col > err.col) {
             self.error = Some(new_err);
         }
     }
@@ -386,11 +384,7 @@ pub fn struct_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
 ///     '0b' [01']+ |
 ///     [0-9']+)
 pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
-    let sign: i128 = if r.peek_cmp_consume(b"-") {
-        -1
-    } else {
-        1
-    };
+    let sign: i128 = if r.peek_cmp_consume(b"-") { -1 } else { 1 };
 
     let Some(ch) = r.peek() else {
         return Err(ParseError::unexpected_eof(r));

@@ -222,7 +222,7 @@ pub enum MaybeTempKind {
 
 pub struct MaybeTemp {
     pub kind: MaybeTempKind,
-    container: Option<Box<MaybeTemp>>
+    container: Option<Box<MaybeTemp>>,
 }
 
 impl MaybeTemp {

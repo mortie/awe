@@ -553,12 +553,15 @@ fn analyze_literal(
 }
 
 fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
-    let is_integral = |x: &sst::TypeKind| matches!(x,
-        sst::TypeKind::Primitive(sst::Primitive::Int) |
-        sst::TypeKind::Primitive(sst::Primitive::UInt));
+    let is_integral = |x: &sst::TypeKind| {
+        matches!(
+            x,
+            sst::TypeKind::Primitive(sst::Primitive::Int)
+                | sst::TypeKind::Primitive(sst::Primitive::UInt)
+        )
+    };
 
-    let is_pointer = |x: &sst::TypeKind| matches!(x,
-        sst::TypeKind::Pointer(..));
+    let is_pointer = |x: &sst::TypeKind| matches!(x, sst::TypeKind::Pointer(..));
 
     if is_integral(&from.kind) && is_integral(&to.kind) {
         return Ok(());
@@ -974,8 +977,10 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     let body_scope = Scope::from_parent(root_scope);
     let stmts = analyze_block(body_scope.clone(), &fd.body)?;
 
-    let returns_void = matches!(return_type.kind,
-        sst::TypeKind::Primitive(sst::Primitive::Void));
+    let returns_void = matches!(
+        return_type.kind,
+        sst::TypeKind::Primitive(sst::Primitive::Void)
+    );
 
     let props = body_scope.props.borrow();
     let func = Rc::new(sst::Function {

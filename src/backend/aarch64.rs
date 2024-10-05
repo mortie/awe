@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::rc::Rc;
 
-use super::common::{self, CodegenError, Result, Frame, MaybeTemp, MaybeTempKind};
+use super::common::{self, CodegenError, Frame, MaybeTemp, MaybeTempKind, Result};
 use crate::analyzer::sst;
 
 /*
@@ -111,8 +111,7 @@ fn gen_binop<W: Write>(
     };
 
     // Signedness
-    let signed = matches!(lhs.typ.kind,
-        sst::TypeKind::Primitive(sst::Primitive::Int));
+    let signed = matches!(lhs.typ.kind, sst::TypeKind::Primitive(sst::Primitive::Int));
 
     let w = &mut frame.w;
     match op {
@@ -186,11 +185,7 @@ fn gen_expr_to<W: Write>(
     match &expr.kind {
         sst::ExprKind::Literal(literal) => match literal {
             sst::Literal::Struct(s, exprs) => {
-                writeln!(
-                    &mut frame.w,
-                    "\t// <Expression::Literal struct {}>",
-                    s.name
-                )?;
+                writeln!(&mut frame.w, "\t// <Expression::Literal struct {}>", s.name)?;
                 gen_struct(frame, loc, s, exprs)?;
                 writeln!(&mut frame.w, "\t// </Expression::Literal>")?;
             }
@@ -340,7 +335,11 @@ fn gen_expr<W: Write>(frame: &mut Frame<W>, expr: &sst::Expression) -> Result<Ma
         }
 
         sst::ExprKind::MemberAccess(expr, field) => {
-            writeln!(&mut frame.w, "\t// <Expression::MemberAccess {}>", field.offset)?;
+            writeln!(
+                &mut frame.w,
+                "\t// <Expression::MemberAccess {}>",
+                field.offset
+            )?;
             let container = gen_expr(frame, expr)?;
             let var = sst::LocalVar {
                 typ: field.typ.clone(),
@@ -426,11 +425,7 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
             let labels = frame.push_loop();
             writeln!(&mut frame.w, "awe${}$L{}:", fname, labels.continue_label)?;
             gen_stmt(frame, body)?;
-            writeln!(
-                &mut frame.w,
-                "\tb awe${}$L{}",
-                fname, labels.continue_label
-            )?;
+            writeln!(&mut frame.w, "\tb awe${}$L{}", fname, labels.continue_label)?;
             writeln!(&mut frame.w, "awe${}$L{}:", fname, labels.break_label)?;
             frame.pop_loop();
             writeln!(&mut frame.w, "\t// </Statement::Loop>")?;
