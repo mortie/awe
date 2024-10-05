@@ -61,21 +61,25 @@ impl TempFile {
     }
 }
 
-fn codegen<W: Write>(w: &mut W, prog: &analyzer::sst::Program) -> Result<()> {
+fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> Result<()> {
+    let Some(backend) = backend::get_backend::<W>(target) else {
+        return Err(format!("No backend for target '{target}'").into());
+    };
+
     write!(w, "// <PRELUDE>\n")?;
-    write!(w, "{}", backend::preludes::AARCH64_DARWIN)?;
+    write!(w, "{}", backend.prelude)?;
     write!(w, "// <PRELUDE>\n")?;
     write!(w, "\n")?;
 
-    backend::aarch64::codegen(w, prog)?;
+    (backend.codegen)(w, prog)?;
     Ok(())
 }
 
-fn compile(prog: &analyzer::sst::Program) -> Result<TempFile> {
+fn compile(prog: &analyzer::sst::Program, target: &str) -> Result<TempFile> {
     let temp = TempFile::new("s")?;
     let f = &temp.file;
 
-    codegen(&mut f.as_ref().unwrap(), prog)?;
+    codegen(&mut f.as_ref().unwrap(), prog, target)?;
     temp.file.as_ref().unwrap().sync_all()?;
     Ok(temp)
 }
@@ -115,6 +119,7 @@ fn run() -> Result<()> {
     let mut parse_only = false;
     let mut analyze_only = false;
     let mut run_only = false;
+    let mut target: Option<String> = None;
     let mut in_path: Option<String> = None;
     let mut out_path: Option<String> = None;
     let mut args = env::args();
@@ -135,8 +140,12 @@ fn run() -> Result<()> {
         } else if arg == "-o" {
             out_path = args.next();
             if out_path.is_none() {
-                eprintln!("-o requires an argument");
-                process::exit(1);
+                return Err("-o requires an argument".into());
+            }
+        } else if arg == "-t" || arg == "--target" {
+            target = args.next();
+            if target.is_none() {
+                return Err("--target requires an argument".into());
             }
         } else if arg.starts_with("-") {
             eprintln!("Unknown option: {}", arg);
@@ -179,22 +188,21 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    let target = match target {
+        Some(target) => target,
+        None => format!("{}-{}", env::consts::OS, env::consts::ARCH),
+    };
+
     if codegen_only {
         match out_path {
             Some(path) => {
                 let mut opts = fs::OpenOptions::new();
                 opts.write(true).truncate(true).create(true);
-                let mut file = match opts.open(path) {
-                    Ok(f) => f,
-                    Err(err) => {
-                        eprintln!("{}", err);
-                        process::exit(1);
-                    }
-                };
+                let mut file = opts.open(path)?;
 
-                codegen(&mut file, &prog)?;
+                codegen(&mut file, &prog, &target)?;
             }
-            None => codegen(&mut io::stdout(), &prog)?,
+            None => codegen(&mut io::stdout(), &prog, &target)?,
         };
 
         return Ok(());
@@ -203,7 +211,7 @@ fn run() -> Result<()> {
     let out_path =
         out_path.unwrap_or_else(|| in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
 
-    let asm_file = compile(&prog)?;
+    let asm_file = compile(&prog, &target)?;
     let obj_file = assemble(asm_file)?;
 
     if run_only {
