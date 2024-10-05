@@ -677,7 +677,7 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
     Err(comb.err())
 }
 
-/// locator ::= '&'
+/// Locator ::= '&' | '.' Ident
 /// ExpressionPart ::= ExpressionAtom Locator* Expression?
 pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
     let mut expr = expression_atom(r)?;
@@ -687,6 +687,10 @@ pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
         if r.peek_cmp_consume(b"&") {
             let sub = Box::new(expr);
             expr = ast::Expression::Reference(sub);
+        } else if r.peek_cmp_consume(b".") {
+            let sub = Box::new(expr);
+            let ident = require("identifier", identifier(r))?;
+            expr = ast::Expression::MemberAccess(sub, ident);
         } else {
             break;
         }

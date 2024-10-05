@@ -74,6 +74,7 @@ pub enum Expression {
     Group(Box<Expression>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
     Reference(Box<Expression>),
+    MemberAccess(Box<Expression>, Ident),
 }
 
 #[derive(Debug)]

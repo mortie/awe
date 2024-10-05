@@ -22,16 +22,46 @@ struct TempVar {
     frame_offset: usize,
 }
 
-enum MaybeTemp {
+enum MaybeTempKind {
     Temp(sst::LocalVar),
     NonTemp(Rc<sst::LocalVar>),
 }
 
+struct MaybeTemp {
+    kind: MaybeTempKind,
+    container: Option<Box<MaybeTemp>>
+}
+
 impl MaybeTemp {
+    fn temp(var: sst::LocalVar) -> Self {
+        Self {
+            kind: MaybeTempKind::Temp(var),
+            container: None,
+        }
+    }
+
+    fn non_temp(var: Rc<sst::LocalVar>) -> Self {
+        Self {
+            kind: MaybeTempKind::NonTemp(var),
+            container: None,
+        }
+    }
+
+    fn with_container(self, container: MaybeTemp) -> Self {
+        if self.container.is_some() {
+            panic!("with_container can only be called on a MaybeTemp without a container");
+        }
+
+        Self {
+            kind: self.kind,
+            container: Some(Box::new(container)),
+        }
+    }
+
     fn var(&self) -> &sst::LocalVar {
-        match self {
-            Self::Temp(var) => var,
-            Self::NonTemp(var) => var,
+        match &self.kind {
+            MaybeTempKind::Temp(var) => var,
+            MaybeTempKind::NonTemp(var) => var,
         }
     }
 }
@@ -137,8 +167,12 @@ impl<'a, W: Write> Frame<'a, W> {
         self.stack_size = last.stack_base;
     }
 
-    fn maybe_pop_temp(&mut self, var: MaybeTemp) {
-        if let MaybeTemp::Temp(temp) = var {
+    fn maybe_pop_temp(&mut self, mut var: MaybeTemp) {
+        if let Some(container) = var.container.take() {
+            self.maybe_pop_temp(*container);
+        }
+
+        if let MaybeTempKind::Temp(temp) = var.kind {
             self.pop_temp(temp);
         }
     }
@@ -468,7 +502,7 @@ fn gen_expr_to<W: Write>(
         sst::ExprKind::Reference(expr) => {
             write!(&mut frame.w, "\t// <Expression::Reference>\n")?;
             let var = gen_expr(frame, expr)?;
-            let MaybeTemp::NonTemp(var) = var else {
+            let MaybeTempKind::NonTemp(var) = var.kind else {
                 return Err(CodegenError::ReferenceToTemporary);
             };
 
@@ -481,6 +515,18 @@ fn gen_expr_to<W: Write>(
             gen_store(frame, loc, 0)?;
             write!(&mut frame.w, "\t// </Expression::Reference>\n")?;
         }
+
+        sst::ExprKind::MemberAccess(expr, field) => {
+            write!(&mut frame.w, "\t// <Expression::MemberAccess {}>\n", field.offset)?;
+            let container = gen_expr(frame, expr)?;
+            let var = sst::LocalVar {
+                typ: field.typ.clone(),
+                frame_offset: container.var().frame_offset + field.offset as isize,
+            };
+            gen_copy(frame, loc, &var)?;
+            frame.maybe_pop_temp(container);
+            write!(&mut frame.w, "\t// </Expression::MemberAccess>\n")?;
+        }
     }
 
     Ok(())
@@ -490,13 +536,25 @@ fn gen_expr<W: Write>(frame: &mut Frame<W>, expr: &sst::Expression) -> Result<Ma
     match &expr.kind {
         sst::ExprKind::Variable(var) => {
             write!(&mut frame.w, "\t// <Expression::Variable />\n")?;
-            Ok(MaybeTemp::NonTemp(var.clone()))
+            Ok(MaybeTemp::non_temp(var.clone()))
+        }
+
+        sst::ExprKind::MemberAccess(expr, field) => {
+            write!(&mut frame.w, "\t// <Expression::MemberAccess {}>\n", field.offset)?;
+            let container = gen_expr(frame, expr)?;
+            let var = sst::LocalVar {
+                typ: field.typ.clone(),
+                frame_offset: container.var().frame_offset + field.offset as isize,
+            };
+            let var = MaybeTemp::temp(var).with_container(container);
+            write!(&mut frame.w, "\t// </Expression::MemberAccess>\n")?;
+            Ok(var)
         }
 
         _ => {
             let temp = frame.push_temp(expr.typ.clone());
             gen_expr_to(frame, expr, &temp)?;
-            Ok(MaybeTemp::Temp(temp))
+            Ok(MaybeTemp::temp(temp))
         }
     }
 }

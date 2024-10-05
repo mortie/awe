@@ -12,6 +12,7 @@ pub enum AnalysisError {
     UndeclaredVariable(Rc<String>),
     UndeclaredType(Rc<String>),
     UndeclaredFunction(Rc<String>),
+    UndeclaredMember(Rc<String>),
     MultipleDefinitions(Rc<String>),
     TypeConflict(Rc<sst::Type>, Rc<sst::Type>),
     InconclusiveInference,
@@ -41,6 +42,7 @@ impl Display for AnalysisError {
             UndeclaredVariable(name) => write!(f, "Undeclared variable: {name}"),
             UndeclaredType(name) => write!(f, "Undeclared type: {name}"),
             UndeclaredFunction(name) => write!(f, "Undeclared function: {name}"),
+            UndeclaredMember(name) => write!(f, "Undeclared struct member: {name}"),
             MultipleDefinitions(name) => write!(f, "Multiple definitions of {name}"),
             TypeConflict(expected, actual) => {
                 write!(f, "Expected type {}, got {}", expected.name, actual.name)
@@ -750,6 +752,30 @@ fn analyze_expression_non_typechecked(
             sst::Expression {
                 typ: make_pointer_to(scope.frame.borrow_mut().ctx, sst_expr.typ.clone()),
                 kind: sst::ExprKind::Reference(Box::new(sst_expr)),
+            }
+        }
+
+        ast::Expression::MemberAccess(expr, ident) => {
+            let sst_expr = analyze_expression(scope.clone(), expr, None)?;
+            let sst::TypeKind::Struct(s) = &sst_expr.typ.kind else {
+                return Err(AnalysisError::ExpectedStruct(sst_expr.typ.clone()));
+            };
+
+            let mut field: Option<sst::FieldDecl> = None;
+            for f in &s.fields {
+                if f.name.as_str() == ident.as_str() {
+                    field = Some(f.clone());
+                    break;
+                }
+            }
+
+            let Some(field) = field else {
+                return Err(AnalysisError::UndeclaredMember(ident.clone()));
+            };
+
+            sst::Expression {
+                typ: field.typ.clone(),
+                kind: sst::ExprKind::MemberAccess(Box::new(sst_expr),  field),
             }
         }
     };

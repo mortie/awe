@@ -31,7 +31,7 @@ pub struct Type {
     pub kind: TypeKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FieldDecl {
     pub name: Rc<String>,
     pub typ: Rc<Type>,
@@ -106,6 +106,7 @@ pub enum ExprKind {
     Variable(Rc<LocalVar>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
     Reference(Box<Expression>),
+    MemberAccess(Box<Expression>, FieldDecl),
 }
 
 #[derive(Debug)]
