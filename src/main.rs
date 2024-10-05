@@ -9,147 +9,112 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-fn temp_file(suffix: &str) -> io::Result<(PathBuf, fs::File)> {
-    let temp_dir = env::temp_dir();
+type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-    let mut num = 0;
-    loop {
-        let mut path = temp_dir.clone();
-        path.push(format!("awe-output.{}.{}", num, suffix));
+struct TempFile {
+    pub path: PathBuf,
+    pub file: Option<fs::File>,
+}
 
-        let res = fs::OpenOptions::new()
-            .read(false)
-            .write(true)
-            .create_new(true)
-            .open(&path);
-        match res {
-            Ok(file) => {
-                return Ok((path, file));
-            }
-
-            Err(err) => {
-                if err.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(err);
-                }
-            }
-        };
-
-        num += 1;
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        self.close();
+        let _ = fs::remove_file(&self.path);
     }
 }
 
-fn codegen<W: Write>(w: &mut W, prog: &analyzer::sst::Program) -> Result<(), Box<dyn Error>> {
+impl TempFile {
+    fn new(suffix: &str) -> io::Result<Self> {
+        let temp_dir = env::temp_dir();
+
+        let mut num = 0;
+        loop {
+            let mut path = temp_dir.clone();
+            path.push(format!("awe-output.{}.{}", num, suffix));
+
+            let res = fs::OpenOptions::new()
+                .read(false)
+                .write(true)
+                .create_new(true)
+                .open(&path);
+            match res {
+                Ok(file) => {
+                    return Ok(Self {
+                        path,
+                        file: Some(file),
+                    });
+                }
+
+                Err(err) => {
+                    if err.kind() != io::ErrorKind::AlreadyExists {
+                        return Err(err);
+                    }
+                }
+            };
+
+            num += 1;
+        }
+    }
+
+    fn close(&mut self) {
+        self.file.take();
+    }
+}
+
+fn codegen<W: Write>(w: &mut W, prog: &analyzer::sst::Program) -> Result<()> {
     write!(w, "// <PRELUDE>\n")?;
     write!(w, "{}", backend::preludes::AARCH64_DARWIN)?;
     write!(w, "// <PRELUDE>\n")?;
     write!(w, "\n")?;
 
-    if let Err(err) = backend::aarch64::codegen(w, prog) {
-        eprintln!("{:?}", err);
-    }
-
+    backend::aarch64::codegen(w, prog)?;
     Ok(())
 }
 
-fn compile(prog: &analyzer::sst::Program) -> io::Result<PathBuf> {
-    let (path, mut f) = temp_file("s")?;
-    eprintln!("Compiling...");
+fn compile(prog: &analyzer::sst::Program) -> Result<TempFile> {
+    let temp = TempFile::new("s")?;
+    let f = &temp.file;
 
-    if let Err(err) = codegen(&mut f, prog) {
-        eprintln!("{}", err);
-        let _ = fs::remove_file(path);
-        process::exit(1);
-    }
-
-    if let Err(err) = f.sync_all() {
-        let _ = fs::remove_file(path);
-        return Err(err);
-    }
-
-    Ok(path)
+    codegen(&mut f.as_ref().unwrap(), prog)?;
+    temp.file.as_ref().unwrap().sync_all()?;
+    Ok(temp)
 }
 
-fn assemble(asm_path: &Path) -> io::Result<PathBuf> {
-    let (obj_path, _) = temp_file("o")?;
-    eprintln!("Assembling...");
+fn assemble(asm: TempFile) -> Result<TempFile> {
+    let temp = TempFile::new("o")?;
 
-    let res = Command::new("as")
+    let mut child = Command::new("as")
         .arg("-o")
-        .arg(&obj_path)
-        .arg(asm_path)
-        .spawn();
-    let mut child = match res {
-        Ok(child) => child,
-
-        Err(err) => {
-            let _ = fs::remove_file(asm_path);
-            let _ = fs::remove_file(obj_path);
-            return Err(err);
-        }
-    };
-
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(err) => {
-            let _ = fs::remove_file(asm_path);
-            let _ = fs::remove_file(obj_path);
-            return Err(err);
-        }
-    };
-
+        .arg(&temp.path)
+        .arg(&asm.path)
+        .spawn()?;
+    let status = child.wait()?;
     if !status.success() {
-        let _ = fs::remove_file(asm_path);
-        let _ = fs::remove_file(obj_path);
-        eprintln!("Assembler exited with error status {}", status);
-        process::exit(1);
+        return Err(format!("Assembler exited with {}", status).into());
     }
 
-    let _ = fs::remove_file(asm_path);
-    Ok(obj_path)
+    Ok(temp)
 }
 
-fn link(obj_path: &Path, out_path: &Path) -> io::Result<()> {
-    eprintln!("Linking to '{}'...", out_path.to_string_lossy());
-
-    let res = Command::new("ld")
+fn link(obj: TempFile, out_path: &Path) -> Result<()> {
+    let mut child = Command::new("ld")
         .arg("-o")
         .arg(&out_path)
-        .arg(obj_path)
-        .spawn();
-    let mut child = match res {
-        Ok(child) => child,
-
-        Err(err) => {
-            let _ = fs::remove_file(obj_path);
-            let _ = fs::remove_file(out_path);
-            return Err(err);
-        }
-    };
-
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(err) => {
-            let _ = fs::remove_file(obj_path);
-            let _ = fs::remove_file(out_path);
-            return Err(err);
-        }
-    };
-
+        .arg(&obj.path)
+        .spawn()?;
+    let status = child.wait()?;
     if !status.success() {
-        let _ = fs::remove_file(obj_path);
-        let _ = fs::remove_file(out_path);
-        eprintln!("Linker exited with error status {}", status);
-        process::exit(1);
+        return Err(format!("Linker exited with {}", status).into());
     }
 
-    let _ = fs::remove_file(obj_path);
     Ok(())
 }
 
-fn main() {
+fn run() -> Result<()> {
     let mut codegen_only = false;
     let mut parse_only = false;
     let mut analyze_only = false;
+    let mut run_only = false;
     let mut in_path: Option<String> = None;
     let mut out_path: Option<String> = None;
     let mut args = env::args();
@@ -162,6 +127,11 @@ fn main() {
             parse_only = true;
         } else if arg == "--analyze" {
             analyze_only = true;
+        } else if arg == "-r" || arg == "--run" {
+            run_only = true;
+            if in_path.is_some() {
+                break;
+            }
         } else if arg == "-o" {
             out_path = args.next();
             if out_path.is_none() {
@@ -173,6 +143,9 @@ fn main() {
             process::exit(1);
         } else if in_path.is_none() {
             in_path = Some(arg);
+            if run_only {
+                break;
+            }
         } else {
             eprintln!("Unexpected argument: {}", arg);
             process::exit(1);
@@ -194,34 +167,20 @@ fn main() {
     let str = fs::read_to_string(&in_path).unwrap();
     let mut reader = parser::reader::Reader::new(str.as_bytes());
 
-    let prog = match parser::parse::program(&mut reader) {
-        Ok(prog) => prog,
-        Err(err) => {
-            eprintln!("{}: {}", in_path, err);
-            process::exit(1);
-        }
-    };
-
+    let prog = parser::parse::program(&mut reader)?;
     if parse_only {
         println!("AST: {:#?}", prog);
         process::exit(0);
     }
 
-    let prog = match analyzer::analyze::program(&prog) {
-        Ok(prog) => prog,
-        Err(err) => {
-            eprintln!("{}", err);
-            process::exit(1);
-        }
-    };
-
+    let prog = analyzer::analyze::program(&prog)?;
     if analyze_only {
         println!("SST: {:#?}", prog);
-        process::exit(0);
+        return Ok(());
     }
 
     if codegen_only {
-        let err = match out_path {
+        match out_path {
             Some(path) => {
                 let mut opts = fs::OpenOptions::new();
                 opts.write(true).truncate(true).create(true);
@@ -233,30 +192,45 @@ fn main() {
                     }
                 };
 
-                codegen(&mut file, &prog)
+                codegen(&mut file, &prog)?;
             }
-            None => codegen(&mut io::stdout(), &prog),
+            None => codegen(&mut io::stdout(), &prog)?,
         };
 
-        if let Err(err) = err {
-            eprintln!("{}", err);
-            process::exit(1);
-        }
-
-        process::exit(0);
+        return Ok(());
     }
 
     let out_path =
         out_path.unwrap_or_else(|| in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
 
-    let res = (|| -> io::Result<()> {
-        let asm_path = compile(&prog)?;
-        let obj_path = assemble(&asm_path)?;
-        link(&obj_path, &Path::new(&out_path))?;
-        Ok(())
-    })();
+    let asm_file = compile(&prog)?;
+    let obj_file = assemble(asm_file)?;
 
-    if let Err(err) = res {
+    if run_only {
+        let exe_file = TempFile::new("bin")?;
+        link(obj_file, &exe_file.path)?;
+
+        let mut cmd = Command::new(&exe_file.path);
+        for arg in args {
+            cmd.arg(arg);
+        }
+
+        let mut child = cmd.spawn()?;
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(format!("Program exited with {}", status).into());
+        }
+
+        return Ok(());
+    }
+
+    eprintln!("Linking '{}'...", out_path);
+    link(obj_file, &Path::new(&out_path))?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(err) = run() {
         eprintln!("{}", err);
         process::exit(1);
     }

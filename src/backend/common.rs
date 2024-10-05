@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fmt::{self, Display};
 use std::io::{self, Write};
 
@@ -16,6 +17,8 @@ pub enum CodegenError {
     #[allow(dead_code)]
     Unimplemented,
 }
+
+impl Error for CodegenError {}
 
 impl From<io::Error> for CodegenError {
     fn from(err: io::Error) -> Self {

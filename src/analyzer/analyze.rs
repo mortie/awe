@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::fmt::{self, Display};
 use std::rc::Rc;
 
@@ -30,6 +31,8 @@ pub enum AnalysisError {
     #[allow(dead_code)]
     Unimplemented,
 }
+
+impl Error for AnalysisError {}
 
 impl Display for AnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

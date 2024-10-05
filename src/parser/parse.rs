@@ -1,10 +1,11 @@
+use std::error::Error;
 use std::fmt::Display;
 use std::rc::Rc;
 
 use super::ast;
 use super::reader::{Reader, SeekPoint};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ErrorKind {
     Inapplicable,
     Missing(&'static str),
@@ -33,12 +34,14 @@ impl Display for ErrorKind {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParseError {
     pub line: u32,
     pub col: u32,
     pub kind: ErrorKind,
 }
+
+impl Error for ParseError {}
 
 impl Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
