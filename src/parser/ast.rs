@@ -18,6 +18,12 @@ pub struct TypeSpec {
 }
 
 #[derive(Debug)]
+pub struct StructLiteral {
+    pub typ: TypeSpec,
+    pub initializers: Vec<FieldInitializer>,
+}
+
+#[derive(Debug)]
 pub enum IntegerSize {
     Byte,
     Short,
@@ -36,6 +42,7 @@ pub struct IntegerLiteral {
 
 #[derive(Debug)]
 pub enum LiteralExpr {
+    Struct(StructLiteral),
     Integer(IntegerLiteral),
     String(Rc<String>),
     Bool(bool),
@@ -84,6 +91,12 @@ pub enum Statement {
 }
 
 pub type Block = Vec<Statement>;
+
+#[derive(Debug)]
+pub struct FieldInitializer {
+    pub name: Ident,
+    pub expr: Box<Expression>,
+}
 
 #[derive(Debug)]
 pub struct FieldDecl {

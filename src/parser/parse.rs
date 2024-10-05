@@ -312,6 +312,77 @@ pub fn expr_list(r: &mut Reader) -> Result<Vec<ast::Expression>> {
     }
 }
 
+/// FieldInitializer ::= Ident? ':' Expression
+pub fn field_initializer(r: &mut Reader) -> Result<ast::FieldInitializer> {
+    whitespace(r);
+
+    let point = r.tell();
+    let ident = identifier(r);
+
+    if let Ok(ident) = ident {
+        whitespace(r);
+        if r.peek_n(0) == Some(b':') && r.peek_n(1) != Some(b':') {
+            // If the next character is a single colon,
+            // then we parsed the name and an expression follows
+            r.consume(); // ':'
+            let expr = Box::new(expression(r)?);
+            return Ok(ast::FieldInitializer { name: ident, expr });
+        }
+    }
+
+    // If the next character is not a single colon,
+    // the (Ident ':') part is missing, and we need to rewind
+    // and parse a type_spec and use '_' as the name
+    r.seek(point);
+    let expr = Box::new(expression(r)?);
+    Ok(ast::FieldInitializer {
+        name: Rc::new("_".into()),
+        expr,
+    })
+}
+
+/// FieldInitializers ::= (FieldInitializer ',')* (FieldInitializer ','?)?
+pub fn field_initializers(r: &mut Reader) -> Result<Vec<ast::FieldInitializer>> {
+    let mut initializers = Vec::<ast::FieldInitializer>::new();
+
+    loop {
+        let point = r.tell();
+        let Ok(initializer) = field_initializer(r) else {
+            r.seek(point);
+            return Ok(initializers);
+        };
+
+        initializers.push(initializer);
+        whitespace(r);
+
+        if !r.peek_cmp_consume(b",") {
+            return Ok(initializers);
+        }
+    }
+}
+
+/// StructLiteral ::= TypeSpec '{' FieldInitializers '}'
+pub fn struct_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
+    let spec = type_spec(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b"{") {
+        return Err(ParseError::inapplicable(r));
+    }
+
+    let initializers = field_initializers(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b"}") {
+        return Err(ParseError::expected_char(r, b'}'));
+    }
+
+    Ok(ast::LiteralExpr::Struct(ast::StructLiteral {
+        typ: spec,
+        initializers,
+    }))
+}
+
 /// IntegerLiteral ::= '-'? (
 ///     '0x' [0-9a-fA-F']+ |
 ///     '0o' [0-7']+ |
@@ -469,11 +540,12 @@ pub fn bool_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     }
 }
 
-/// LiteralExpr ::= IntegerLiteral
+/// LiteralExpr ::= StructLiteral | IntegerLiteral | StringLiteral | BoolLiteral
 pub fn literal_expr(r: &mut Reader) -> Result<ast::Expression> {
     let literal = (|| -> Result<ast::LiteralExpr> {
         let mut comb = Combinator::new(r);
 
+        try_parse!(comb, struct_literal_expr);
         try_parse!(comb, integer_literal_expr);
         try_parse!(comb, string_literal_expr);
         try_parse!(comb, bool_literal_expr);

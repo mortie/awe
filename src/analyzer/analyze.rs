@@ -19,6 +19,8 @@ pub enum AnalysisError {
     BadTypeParameters,
     NonVoidFunctionMustReturn,
     BadCast(Rc<sst::Type>, Rc<sst::Type>),
+    ExpectedStruct(Rc<sst::Type>),
+    BadStructInitializerName(Rc<String>, Rc<String>),
 
     FunctionCtx(Rc<String>, Box<AnalysisError>),
 
@@ -50,6 +52,10 @@ impl Display for AnalysisError {
             BadTypeParameters => write!(f, "Bad type parameters"),
             NonVoidFunctionMustReturn => write!(f, "Non-void function must return a value"),
             BadCast(from, to) => write!(f, "Illegal cast from {} to {}", from.name, to.name),
+            ExpectedStruct(got) => write!(f, "Expecetd struct, got non-struct {}", got.name),
+            BadStructInitializerName(expected, got) => {
+                write!(f, "Expected initializer for {expected} here, got {got}")
+            }
 
             FunctionCtx(name, err) => write!(f, "In function {name}: {err}"),
 
@@ -407,11 +413,7 @@ fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
     }
 
     let info = analyze_field_decls(ctx, &sd.fields, None)?;
-
-    let mut fields = HashMap::<Rc<String>, sst::FieldDecl>::new();
-    for field in info.fields {
-        fields.insert(field.name.clone(), field);
-    }
+    let fields = info.fields;
 
     let typ = Rc::new(sst::Type {
         name: name.clone(),
@@ -444,6 +446,47 @@ fn analyze_literal(
     inferred: Option<Rc<sst::Type>>,
 ) -> Result<sst::Expression> {
     match literal {
+        ast::LiteralExpr::Struct(literal) => {
+            let typ = scope.get_type(&literal.typ)?;
+            let sst::TypeKind::Struct(s) = &typ.kind else {
+                return Err(AnalysisError::ExpectedStruct(typ));
+            };
+
+            let count = s.fields.len();
+            if count != literal.initializers.len() {
+                return Err(AnalysisError::BadParamCount(
+                    count,
+                    literal.initializers.len(),
+                ));
+            }
+
+            let mut exprs = Vec::<sst::Expression>::new();
+            exprs.reserve(count);
+            for i in 0..count {
+                let decl = &s.fields[i];
+                let initializer = &literal.initializers[i];
+                if initializer.name.as_str() != "_"
+                    && initializer.name.as_str() != decl.name.as_str()
+                {
+                    return Err(AnalysisError::BadStructInitializerName(
+                        decl.name.clone(),
+                        initializer.name.clone(),
+                    ));
+                }
+
+                exprs.push(analyze_expression(
+                    scope.clone(),
+                    &initializer.expr,
+                    Some(decl.typ.clone()),
+                )?);
+            }
+
+            Ok(sst::Expression {
+                typ: typ.clone(),
+                kind: sst::ExprKind::Literal(sst::Literal::Struct(s.clone(), exprs)),
+            })
+        }
+
         ast::LiteralExpr::Integer(literal) => {
             let frame = scope.frame.borrow();
             let types = &frame.ctx.types;

@@ -48,7 +48,7 @@ pub struct FieldDecls {
 #[derive(Debug)]
 pub struct Struct {
     pub name: Rc<String>,
-    pub fields: HashMap<Rc<String>, FieldDecl>,
+    pub fields: Vec<FieldDecl>,
     pub methods: HashMap<Rc<String>, Rc<Function>>,
 }
 
@@ -77,6 +77,7 @@ pub struct StringConstant {
 
 #[derive(Debug)]
 pub enum Literal {
+    Struct(Rc<Struct>, Vec<Expression>),
     Integer(i128),
     String(StringConstant),
     Bool(bool),

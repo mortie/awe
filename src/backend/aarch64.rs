@@ -217,6 +217,28 @@ fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> R
     Ok(())
 }
 
+fn gen_struct<W: Write>(
+    frame: &mut Frame<W>,
+    dest: &sst::LocalVar,
+    s: &sst::Struct,
+    exprs: &Vec<sst::Expression>,
+) -> Result<()> {
+    let count = s.fields.len();
+    for i in 0..count {
+        let field = &s.fields[i];
+        let expr = &exprs[i];
+
+        let var = sst::LocalVar {
+            typ: field.typ.clone(),
+            frame_offset: dest.frame_offset + field.offset as isize,
+        };
+
+        gen_expr_to(frame, expr, &var)?;
+    }
+
+    Ok(())
+}
+
 fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) -> Result<()> {
     let size = dest.typ.size;
 
@@ -325,32 +347,44 @@ fn gen_expr_to<W: Write>(
     loc: &sst::LocalVar,
 ) -> Result<()> {
     match &expr.kind {
-        sst::ExprKind::Literal(literal) => {
-            write!(
-                &mut frame.w,
-                "\t// <Expression::Literal {} {:?}>\n",
-                expr.typ.name, literal
-            )?;
-            match literal {
-                sst::Literal::Integer(num) => {
-                    gen_integer(frame, loc, *num)?;
-                }
-
-                sst::Literal::String(sc) => {
-                    write!(&mut frame.w, "\tadr x0, awestr${}\n", sc.index)?;
-                    write!(&mut frame.w, "\tstr x0, [sp, {}]\n", frame_offset(loc))?;
-                }
-
-                sst::Literal::Bool(b) => {
-                    if *b {
-                        gen_integer(frame, loc, 1)?;
-                    } else {
-                        gen_integer(frame, loc, 0)?;
-                    }
-                }
+        sst::ExprKind::Literal(literal) => match literal {
+            sst::Literal::Struct(s, exprs) => {
+                write!(
+                    &mut frame.w,
+                    "\t// <Expression::Literal struct {}>\n",
+                    s.name
+                )?;
+                gen_struct(frame, loc, s, exprs)?;
+                write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
             }
-            write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
-        }
+
+            sst::Literal::Integer(num) => {
+                write!(&mut frame.w, "\t// <Expression::Literal integer {}>\n", num)?;
+                gen_integer(frame, loc, *num)?;
+                write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
+            }
+
+            sst::Literal::String(sc) => {
+                write!(
+                    &mut frame.w,
+                    "\t// <Expression::Literal string {}>\n",
+                    sc.index
+                )?;
+                write!(&mut frame.w, "\tadr x0, awestr${}\n", sc.index)?;
+                write!(&mut frame.w, "\tstr x0, [sp, {}]\n", frame_offset(loc))?;
+                write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
+            }
+
+            sst::Literal::Bool(b) => {
+                write!(&mut frame.w, "\t// <Expression::Literal bool {}>\n", b)?;
+                if *b {
+                    gen_integer(frame, loc, 1)?;
+                } else {
+                    gen_integer(frame, loc, 0)?;
+                }
+                write!(&mut frame.w, "\t// </Expression::Literal>\n")?;
+            }
+        },
 
         sst::ExprKind::FuncCall(signature, params) => {
             write!(
@@ -566,9 +600,8 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
 
         sst::Statement::Expression(expr) => {
             write!(&mut frame.w, "\t// <Statement::Expression>\n")?;
-            let local = frame.push_temp(expr.typ.clone());
-            gen_expr_to(frame, expr, &local)?;
-            frame.pop_temp(local);
+            let temp = gen_expr(frame, expr)?;
+            frame.maybe_pop_temp(temp);
             write!(&mut frame.w, "\t// </Statement::Expression>\n")?;
         }
 
