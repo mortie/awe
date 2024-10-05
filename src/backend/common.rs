@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::io::{self, Write};
+use std::rc::Rc;
 
 use crate::analyzer::sst;
 
@@ -63,4 +64,197 @@ pub fn gen_signature_comment<W: Write>(w: &mut W, sig: &sst::FuncSignature) -> R
 
     write!(w, ") {}\n", sig.ret.name)?;
     Ok(())
+}
+
+#[derive(Clone)]
+pub struct Loop {
+    pub break_label: usize,
+    pub continue_label: usize,
+}
+
+pub struct TempVar {
+    typ: Rc<sst::Type>,
+    stack_base: usize,
+    frame_offset: usize,
+}
+
+pub struct Frame<'a, W: Write> {
+    pub w: W,
+    pub func: &'a sst::Function,
+    stack_size: usize,
+    temps: Vec<TempVar>,
+    sentinel: Rc<sst::Type>,
+    next_label: usize,
+    loops: Vec<Loop>,
+}
+
+impl<'a, W: Write> Frame<'a, W> {
+    pub fn new(w: W, func: &'a sst::Function, sentinel: Rc<sst::Type>) -> Self {
+        let stack_size = func.stack_size;
+        Self {
+            w,
+            func,
+            stack_size,
+            temps: Vec::new(),
+            sentinel,
+            next_label: 0,
+            loops: Vec::new(),
+        }
+    }
+
+    pub fn push_temp(&mut self, typ: Rc<sst::Type>) -> sst::LocalVar {
+        let stack_base = self.stack_size;
+        while typ.align > 0 && self.stack_size % typ.align != 0 {
+            self.stack_size += 1;
+        }
+
+        let frame_offset = self.stack_size;
+        self.stack_size += typ.size;
+
+        self.temps.push(TempVar {
+            typ: typ.clone(),
+            stack_base,
+            frame_offset,
+        });
+
+        sst::LocalVar {
+            typ,
+            frame_offset: frame_offset as isize,
+        }
+    }
+
+    pub fn push_align(&mut self, align: usize) -> sst::LocalVar {
+        let stack_base = self.stack_size;
+        while align > 0 && self.stack_size % align != 0 {
+            self.stack_size += 1;
+        }
+
+        let frame_offset = self.stack_size;
+
+        self.temps.push(TempVar {
+            typ: self.sentinel.clone(),
+            stack_base,
+            frame_offset,
+        });
+
+        sst::LocalVar {
+            typ: self.sentinel.clone(),
+            frame_offset: frame_offset as isize,
+        }
+    }
+
+    pub fn pop_temp(&mut self, var: sst::LocalVar) {
+        // We want to ensure that the passed-in variable is the most recent
+        // variable returned from push_temp().
+        // We don't keep around a reference to the actual LocalVar
+        // that was returned by push_temp,
+        // so we do a series of sanity checks instead.
+        // If they are violated, that's a serious programming error,
+        // so we just panic.
+
+        let Some(last) = self.temps.pop() else {
+            panic!("pop_temp called with an empty temporary stack!");
+        };
+
+        if !Rc::ptr_eq(&last.typ, &var.typ) {
+            panic!(
+                "pop_temp called with wrong type: expected {}, got {}",
+                last.typ.name, var.typ.name
+            );
+        }
+
+        if last.frame_offset as isize != var.frame_offset {
+            panic!(
+                "pop_temp called with wrong frame_offset: expected {}, got {}",
+                last.frame_offset, var.frame_offset
+            );
+        }
+
+        self.stack_size = last.stack_base;
+    }
+
+    pub fn maybe_pop_temp(&mut self, mut var: MaybeTemp) {
+        if let Some(container) = var.container.take() {
+            self.maybe_pop_temp(*container);
+        }
+
+        if let MaybeTempKind::Temp(temp) = var.kind {
+            self.pop_temp(temp);
+        }
+    }
+
+    pub fn label(&mut self) -> usize {
+        let label = self.next_label;
+        self.next_label += 1;
+        label
+    }
+
+    pub fn push_loop(&mut self) -> Loop {
+        let labels = Loop {
+            break_label: self.label(),
+            continue_label: self.label(),
+        };
+        self.loops.push(labels.clone());
+        labels
+    }
+
+    pub fn top_loop(&self) -> Option<Loop> {
+        if let Some(labels) = self.loops.first() {
+            return Some(labels.clone());
+        }
+
+        None
+    }
+
+    pub fn pop_loop(&mut self) {
+        self.loops.pop();
+    }
+
+    pub fn done(self) -> W {
+        self.w
+    }
+}
+
+pub enum MaybeTempKind {
+    Temp(sst::LocalVar),
+    NonTemp(sst::LocalVar),
+}
+
+pub struct MaybeTemp {
+    pub kind: MaybeTempKind,
+    container: Option<Box<MaybeTemp>>
+}
+
+impl MaybeTemp {
+    pub fn temp(var: sst::LocalVar) -> Self {
+        Self {
+            kind: MaybeTempKind::Temp(var),
+            container: None,
+        }
+    }
+
+    pub fn non_temp(var: sst::LocalVar) -> Self {
+        Self {
+            kind: MaybeTempKind::NonTemp(var),
+            container: None,
+        }
+    }
+
+    pub fn with_container(self, container: MaybeTemp) -> Self {
+        if self.container.is_some() {
+            panic!("with_container can only be called on a MaybeTemp without a container");
+        }
+
+        Self {
+            kind: self.kind,
+            container: Some(Box::new(container)),
+        }
+    }
+
+    pub fn var(&self) -> &sst::LocalVar {
+        match &self.kind {
+            MaybeTempKind::Temp(var) => var,
+            MaybeTempKind::NonTemp(var) => var,
+        }
+    }
 }
