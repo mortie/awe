@@ -547,7 +547,7 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
             } else if ch == b'\r' {
                 write!(w, "\\r")?;
             } else if ch == b'\n' {
-                writeln!(w, "\n")?;
+                write!(w, "\\n")?;
             } else {
                 w.write_all(&[ch])?;
             }
