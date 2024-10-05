@@ -6,9 +6,11 @@ pub mod preludes;
 
 mod common;
 
+type CodegenFn<W> = dyn Fn(W, &sst::Program) -> common::Result<()>;
+
 pub struct Backend<W: Write> {
     pub prelude: &'static str,
-    pub codegen: Box<dyn Fn(W, &sst::Program) -> common::Result<()>>,
+    pub codegen: Box<CodegenFn<W>>,
 }
 
 pub fn get_backend<W: Write>(target: &str) -> Option<Backend<W>> {

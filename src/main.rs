@@ -66,10 +66,10 @@ fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> R
         return Err(format!("No backend for target '{target}'").into());
     };
 
-    write!(w, "// <PRELUDE>\n")?;
+    writeln!(w, "// <PRELUDE>")?;
     write!(w, "{}", backend.prelude)?;
-    write!(w, "// <PRELUDE>\n")?;
-    write!(w, "\n")?;
+    writeln!(w, "// <PRELUDE>")?;
+    writeln!(w)?;
 
     (backend.codegen)(w, prog)?;
     Ok(())
@@ -103,7 +103,7 @@ fn assemble(asm: TempFile) -> Result<TempFile> {
 fn link(obj: TempFile, out_path: &Path) -> Result<()> {
     let mut child = Command::new("ld")
         .arg("-o")
-        .arg(&out_path)
+        .arg(out_path)
         .arg(&obj.path)
         .spawn()?;
     let status = child.wait()?;
@@ -233,7 +233,7 @@ fn run() -> Result<()> {
     }
 
     eprintln!("Linking '{}'...", out_path);
-    link(obj_file, &Path::new(&out_path))?;
+    link(obj_file, Path::new(&out_path))?;
     Ok(())
 }
 

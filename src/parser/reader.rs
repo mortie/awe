@@ -35,12 +35,12 @@ impl<'a> Reader<'a> {
     }
 
     pub fn peek_cmp(&self, str: &[u8]) -> bool {
-        for i in 0..str.len() {
+        for (i, expected) in str.iter().enumerate() {
             let Some(ch) = self.peek_n(i) else {
                 return false;
             };
 
-            if ch != str[i] {
+            if ch != *expected {
                 return false;
             }
         }

@@ -12,7 +12,6 @@ pub enum ErrorKind {
     UnexpectedEOF,
     UnexpectedChar(u8),
     ExpectedChar(u8),
-    BadDigit(u8),
     NumberLiteralOverflow,
     BadEscape(u8),
     InvalidUTF8,
@@ -26,7 +25,6 @@ impl Display for ErrorKind {
             ErrorKind::UnexpectedEOF => write!(f, "Unexpected EOF"),
             ErrorKind::UnexpectedChar(ch) => write!(f, "Unexpected char '{}'", ch as char),
             ErrorKind::ExpectedChar(ch) => write!(f, "Expected '{}'", ch as char),
-            ErrorKind::BadDigit(ch) => write!(f, "Digit '{}' inappropriate for radix", ch as char),
             ErrorKind::NumberLiteralOverflow => write!(f, "Number literal overflow"),
             ErrorKind::BadEscape(ch) => write!(f, "Bad escape sequence '\\{}'", ch as char),
             ErrorKind::InvalidUTF8 => write!(f, "Invalid UTF-8 in string literal"),
@@ -84,10 +82,6 @@ impl ParseError {
 
     fn unexpected_peek(r: &Reader) -> Self {
         Self::unexpected_maybe(r, r.peek())
-    }
-
-    fn bad_digit(r: &Reader, ch: u8) -> Self {
-        Self::new(r, ErrorKind::BadDigit(ch))
     }
 
     fn number_literal_overflow(r: &Reader) -> Self {
@@ -150,9 +144,9 @@ impl<'a, 'b> Combinator<'a, 'b> {
             return;
         };
 
-        if new_err.line > err.line {
-            self.error = Some(new_err);
-        } else if new_err.line == err.line && new_err.col > err.col {
+        if new_err.line > err.line ||
+            (new_err.line == err.line && new_err.col > err.col)
+        {
             self.error = Some(new_err);
         }
     }
@@ -178,11 +172,11 @@ macro_rules! try_parse {
 }
 
 fn is_alpha(ch: u8) -> bool {
-    (ch >= b'a' && ch <= b'z') || (ch >= b'A' && ch <= b'Z')
+    ch.is_ascii_lowercase() || ch.is_ascii_uppercase()
 }
 
 fn is_alnum(ch: u8) -> bool {
-    is_alpha(ch) || (ch >= b'0' && ch <= b'9')
+    ch.is_ascii_alphanumeric()
 }
 
 fn is_keyword(s: &str) -> bool {
@@ -392,18 +386,17 @@ pub fn struct_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
 ///     '0b' [01']+ |
 ///     [0-9']+)
 pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
-    let sign: i128;
-    if r.peek_cmp_consume(b"-") {
-        sign = -1;
+    let sign: i128 = if r.peek_cmp_consume(b"-") {
+        -1
     } else {
-        sign = 1;
-    }
+        1
+    };
 
     let Some(ch) = r.peek() else {
         return Err(ParseError::unexpected_eof(r));
     };
 
-    if ch < b'0' || ch > b'9' {
+    if !ch.is_ascii_digit() {
         return Err(ParseError::inapplicable(r));
     }
 
@@ -419,7 +412,7 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
     }
 
     // Error with 0x/0o/0b without follow-up digits
-    if ch < b'0' || ch > b'9' {
+    if !ch.is_ascii_digit() {
         return Err(ParseError::unexpected_char(r, ch));
     }
 
@@ -435,11 +428,11 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
         }
 
         let digit;
-        if ch >= b'0' && ch <= b'9' {
+        if ch.is_ascii_digit() {
             digit = ch - b'0';
-        } else if ch >= b'a' && ch <= b'z' {
+        } else if ch.is_ascii_lowercase() {
             digit = ch - b'a' + 10;
-        } else if ch >= b'A' && ch <= b'Z' {
+        } else if ch.is_ascii_uppercase() {
             digit = ch - b'A' + 10;
         } else {
             break;
@@ -447,7 +440,7 @@ pub fn integer_literal_expr(r: &mut Reader) -> Result<ast::LiteralExpr> {
 
         let digit = digit as i128;
         if digit >= radix {
-            return Err(ParseError::bad_digit(r, ch));
+            break;
         }
 
         num = match num.checked_mul(radix) {
@@ -797,7 +790,7 @@ fn else_part(r: &mut Reader) -> Result<ast::Statement> {
         return Err(ParseError::inapplicable(r));
     }
 
-    Ok(statement(r)?)
+    statement(r)
 }
 
 /// IfStmt ::= 'if' Expression Statement ElsePart?

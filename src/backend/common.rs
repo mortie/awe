@@ -62,7 +62,7 @@ pub fn gen_signature_comment<W: Write>(w: &mut W, sig: &sst::FuncSignature) -> R
         write!(w, "{}: {}", param.name, param.typ.name)?;
     }
 
-    write!(w, ") {}\n", sig.ret.name)?;
+    writeln!(w, ") {}", sig.ret.name)?;
     Ok(())
 }
 

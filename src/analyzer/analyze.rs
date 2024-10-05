@@ -189,7 +189,7 @@ impl<'a> Scope<'a> {
     }
 
     fn get_type(&self, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
-        get_type(self.frame.borrow_mut().ctx, spec, Some(&self))
+        get_type(self.frame.borrow_mut().ctx, spec, Some(self))
     }
 
     fn get_func_sig(&self, ident: &ast::QualifiedIdent) -> Result<Rc<sst::FuncSignature>> {
@@ -290,7 +290,7 @@ impl Context {
 }
 
 fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
-    if ident.len() == 0 {
+    if ident.is_empty() {
         eprintln!("Zero-length ident! Treating as '_'");
         return Rc::new("_".to_owned());
     }
@@ -301,7 +301,7 @@ fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
 
     let mut name = String::new();
     for part in ident {
-        if name != "" {
+        if !name.is_empty() {
             name += "::";
         }
         name += part;
@@ -327,31 +327,28 @@ fn get_type(
         return Ok(make_pointer_to(ctx, typ));
     }
 
-    if spec.params.len() == 0 {
+    if spec.params.is_empty() {
         if let Some(typ) = scope.and_then(|scope| scope.get_type_alias(&ident)) {
             return Ok(typ);
         }
 
-        if let Some(decl) = ctx.decls.get(&ident) {
-            if let sst::Declaration::Type(typ) = decl {
-                return Ok(typ.clone());
-            }
+        if let Some(sst::Declaration::Type(typ)) = ctx.decls.get(&ident) {
+            return Ok(typ.clone());
         }
 
+        eprintln!("during get_type {:?}: undeclared type {}", spec, ident);
         return Err(AnalysisError::UndeclaredType(ident));
     }
 
     // TODO: Support type templates
 
-    return Err(AnalysisError::UndeclaredType(ident));
+    Err(AnalysisError::UndeclaredType(ident))
 }
 
 fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
     let name = Rc::new(format!("ptr[{}]", typ.name));
-    if let Some(decl) = &ctx.decls.get(&name) {
-        if let sst::Declaration::Type(typ) = decl {
-            return typ.clone();
-        }
+    if let Some(sst::Declaration::Type(typ)) = &ctx.decls.get(&name) {
+        return typ.clone();
     }
 
     let ptr = Rc::new(sst::Type {
@@ -465,8 +462,7 @@ fn analyze_literal(
                 ));
             }
 
-            let mut exprs = Vec::<sst::Expression>::new();
-            exprs.reserve(count);
+            let mut exprs = Vec::<sst::Expression>::with_capacity(count);
             for i in 0..count {
                 let decl = &s.fields[i];
                 let initializer = &literal.initializers[i];
@@ -557,16 +553,12 @@ fn analyze_literal(
 }
 
 fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
-    let is_integral = |x: &sst::TypeKind| match x {
-        sst::TypeKind::Primitive(sst::Primitive::Int) => true,
-        sst::TypeKind::Primitive(sst::Primitive::UInt) => true,
-        _ => false,
-    };
+    let is_integral = |x: &sst::TypeKind| matches!(x,
+        sst::TypeKind::Primitive(sst::Primitive::Int) |
+        sst::TypeKind::Primitive(sst::Primitive::UInt));
 
-    let is_pointer = |x: &sst::TypeKind| match x {
-        sst::TypeKind::Pointer(..) => true,
-        _ => false,
-    };
+    let is_pointer = |x: &sst::TypeKind| matches!(x,
+        sst::TypeKind::Pointer(..));
 
     if is_integral(&from.kind) && is_integral(&to.kind) {
         return Ok(());
@@ -582,7 +574,7 @@ fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
 fn analyze_func_call(
     scope: Rc<Scope>,
     ident: &ast::QualifiedIdent,
-    params: &Vec<ast::Expression>,
+    params: &[ast::Expression],
 ) -> Result<sst::Expression> {
     let maybe_sig = scope.get_func_sig(ident);
 
@@ -622,13 +614,12 @@ fn analyze_func_call(
         return Err(AnalysisError::BadParamCount(len, params.len()));
     }
 
-    let mut exprs = Vec::<sst::Expression>::new();
-    exprs.reserve(len);
-    for i in 0..len {
+    let mut exprs = Vec::<sst::Expression>::with_capacity(len);
+    for (i, field) in sig.params.fields.iter().enumerate() {
         exprs.push(analyze_expression(
             scope.clone(),
             &params[i],
-            Some(sig.params.fields[i].typ.clone()),
+            Some(field.typ.clone()),
         )?);
     }
 
@@ -756,9 +747,7 @@ fn analyze_expression_non_typechecked(
             )?);
 
             if flip {
-                let tmp = sst_lhs;
-                sst_lhs = sst_rhs;
-                sst_rhs = tmp;
+                std::mem::swap(&mut sst_lhs, &mut sst_rhs);
             }
 
             sst::Expression {
@@ -853,7 +842,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             // because that means there's no break statement in the body.
             // If we know we won't always return, that's due to a break;
             // after the loop, we go back to not knowing.
-            if scope.props.borrow().always_returns == None {
+            if scope.props.borrow().always_returns.is_none() {
                 scope.props.borrow_mut().always_returns = Some(true);
             } else if scope.props.borrow().always_returns == Some(false) {
                 scope.props.borrow_mut().always_returns = None;
@@ -900,11 +889,8 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
                 "DEBUG: Expression has type '{}', size {}",
                 sst_expr.typ.name, sst_expr.typ.size,
             );
-            match sst_expr.kind {
-                sst::ExprKind::Variable(var) => {
-                    eprintln!(" -> Frame offset: {}", var.frame_offset);
-                }
-                _ => (),
+            if let sst::ExprKind::Variable(var) = sst_expr.kind {
+                eprintln!(" -> Frame offset: {}", var.frame_offset);
             }
             Ok(sst::Statement::Empty)
         }
@@ -988,10 +974,8 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     let body_scope = Scope::from_parent(root_scope);
     let stmts = analyze_block(body_scope.clone(), &fd.body)?;
 
-    let returns_void = match return_type.kind {
-        sst::TypeKind::Primitive(sst::Primitive::Void) => true,
-        _ => false,
-    };
+    let returns_void = matches!(return_type.kind,
+        sst::TypeKind::Primitive(sst::Primitive::Void));
 
     let props = body_scope.props.borrow();
     let func = Rc::new(sst::Function {
