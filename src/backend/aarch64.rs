@@ -160,11 +160,7 @@ fn gen_binop(
     gen_store(frame, dest, 0)
 }
 
-fn gen_copy(
-    frame: &mut Frame,
-    dest: &sst::LocalVar,
-    src: &sst::LocalVar,
-) -> Result<()> {
+fn gen_copy(frame: &mut Frame, dest: &sst::LocalVar, src: &sst::LocalVar) -> Result<()> {
     if dest.typ.size != src.typ.size {
         return Err(CodegenError::SizeMismatch(dest.typ.size, src.typ.size));
     }
@@ -177,11 +173,7 @@ fn gen_copy(
     gen_store(frame, dest, 0)
 }
 
-fn gen_expr_to(
-    frame: &mut Frame,
-    expr: &sst::Expression,
-    loc: &sst::LocalVar,
-) -> Result<()> {
+fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -> Result<()> {
     match &expr.kind {
         sst::ExprKind::Literal(literal) => match literal {
             sst::Literal::Struct(s, exprs) => {
