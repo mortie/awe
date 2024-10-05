@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, rc::Rc};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalVar {
     pub typ: Rc<Type>,
     pub frame_offset: isize,
@@ -52,6 +52,18 @@ pub struct Struct {
     pub methods: HashMap<Rc<String>, Rc<Function>>,
 }
 
+impl Struct {
+    pub fn field(&self, name: &str) -> Option<FieldDecl> {
+        for field in &self.fields {
+            if field.name.as_str() == name {
+                return Some(field.clone());
+            }
+        }
+
+        None
+    }
+}
+
 #[derive(Debug)]
 pub struct FuncSignature {
     pub name: Rc<String>,
@@ -97,11 +109,16 @@ pub enum BinOp {
 }
 
 #[derive(Debug)]
+pub enum Locator {
+    MemberAccess(FieldDecl),
+}
+
+#[derive(Debug)]
 pub enum ExprKind {
     Literal(Literal),
     FuncCall(Rc<FuncSignature>, Vec<Expression>),
     Cast(Box<Expression>),
-    Assignment(Rc<LocalVar>, Box<Expression>),
+    Assignment(Rc<LocalVar>, Vec<Locator>, Box<Expression>),
     Uninitialized,
     Variable(Rc<LocalVar>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),

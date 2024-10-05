@@ -595,11 +595,23 @@ pub fn cast_expr(r: &mut Reader) -> Result<ast::Expression> {
     Ok(ast::Expression::Cast(typ, Box::new(expr)))
 }
 
-/// AssignExpr ::= Ident '=' Expression
+/// Locator ::= '.' Ident
+/// AssignExpr ::= Ident Locator* '=' Expression
 pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
     let ident = identifier(r)?;
     if is_keyword(ident.as_str()) {
         return Err(ParseError::inapplicable(r));
+    }
+
+    let mut locators = Vec::<ast::Locator>::new();
+    loop {
+        whitespace(r);
+        if r.peek_cmp_consume(b".") {
+            let ident = identifier(r)?;
+            locators.push(ast::Locator::MemberAccess(ident));
+        } else {
+            break;
+        }
     }
 
     whitespace(r);
@@ -609,7 +621,7 @@ pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
 
     let expr = expression(r)?;
 
-    Ok(ast::Expression::Assignment(ident, Box::new(expr)))
+    Ok(ast::Expression::Assignment(ident, locators, Box::new(expr)))
 }
 
 /// UninitializedExpr ::= 'uninitialized' TypeSpec?
@@ -677,8 +689,8 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
     Err(comb.err())
 }
 
-/// Locator ::= '&' | '.' Ident
-/// ExpressionPart ::= ExpressionAtom Locator* Expression?
+/// Accessor ::= '&' | '.' Ident
+/// ExpressionPart ::= ExpressionAtom Accessor* Expression?
 pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
     let mut expr = expression_atom(r)?;
 

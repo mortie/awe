@@ -64,11 +64,16 @@ pub enum BinOp {
 }
 
 #[derive(Debug)]
+pub enum Locator {
+    MemberAccess(Ident),
+}
+
+#[derive(Debug)]
 pub enum Expression {
     Literal(LiteralExpr),
     FuncCall(QualifiedIdent, Vec<Expression>),
     Cast(TypeSpec, Box<Expression>),
-    Assignment(Ident, Box<Expression>),
+    Assignment(Ident, Vec<Locator>, Box<Expression>),
     Uninitialized(Option<TypeSpec>),
     Variable(Ident),
     Group(Box<Expression>),

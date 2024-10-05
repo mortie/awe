@@ -666,12 +666,32 @@ fn analyze_expression_non_typechecked(
             }
         }
 
-        ast::Expression::Assignment(ident, expr) => {
+        ast::Expression::Assignment(ident, locators, expr) => {
             let var = scope.lookup(ident.clone())?;
-            let expr = analyze_expression(scope, expr, Some(var.typ.clone()))?;
+
+            let mut typ = var.typ.clone();
+            let mut sst_locators = Vec::<sst::Locator>::new();
+            for locator in locators {
+                match locator {
+                    ast::Locator::MemberAccess(ident) => {
+                        let sst::TypeKind::Struct(s) = &var.typ.kind else {
+                            return Err(AnalysisError::ExpectedStruct(var.typ.clone()));
+                        };
+
+                        let Some(field) = s.field(ident.as_str()) else {
+                            return Err(AnalysisError::UndeclaredMember(ident.clone()));
+                        };
+
+                        typ = field.typ.clone();
+                        sst_locators.push(sst::Locator::MemberAccess(field));
+                    }
+                }
+            }
+
+            let expr = analyze_expression(scope, expr, Some(typ.clone()))?;
             sst::Expression {
-                typ: var.typ.clone(),
-                kind: sst::ExprKind::Assignment(var, Box::new(expr)),
+                typ,
+                kind: sst::ExprKind::Assignment(var, sst_locators, Box::new(expr)),
             }
         }
 
@@ -761,21 +781,13 @@ fn analyze_expression_non_typechecked(
                 return Err(AnalysisError::ExpectedStruct(sst_expr.typ.clone()));
             };
 
-            let mut field: Option<sst::FieldDecl> = None;
-            for f in &s.fields {
-                if f.name.as_str() == ident.as_str() {
-                    field = Some(f.clone());
-                    break;
-                }
-            }
-
-            let Some(field) = field else {
+            let Some(field) = s.field(ident.as_str()) else {
                 return Err(AnalysisError::UndeclaredMember(ident.clone()));
             };
 
             sst::Expression {
                 typ: field.typ.clone(),
-                kind: sst::ExprKind::MemberAccess(Box::new(sst_expr),  field),
+                kind: sst::ExprKind::MemberAccess(Box::new(sst_expr), field),
             }
         }
     };
