@@ -20,7 +20,7 @@ fn frame_offset(var: &sst::LocalVar) -> isize {
     -(var.frame_offset + var.typ.size as isize)
 }
 
-fn gen_load<W: Write>(frame: &mut Frame<W>, reg: u8, src: &sst::LocalVar) -> Result<()> {
+fn gen_load(frame: &mut Frame, reg: u8, src: &sst::LocalVar) -> Result<()> {
     let soffset = frame_offset(src);
     let size = src.typ.size;
     let s = match src.typ.kind {
@@ -41,7 +41,7 @@ fn gen_load<W: Write>(frame: &mut Frame<W>, reg: u8, src: &sst::LocalVar) -> Res
     Ok(())
 }
 
-fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> Result<()> {
+fn gen_store(frame: &mut Frame, dest: &sst::LocalVar, reg: u8) -> Result<()> {
     let doffset = frame_offset(dest);
     let size = dest.typ.size;
 
@@ -58,8 +58,8 @@ fn gen_store<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, reg: u8) -> R
     Ok(())
 }
 
-fn gen_struct<W: Write>(
-    frame: &mut Frame<W>,
+fn gen_struct(
+    frame: &mut Frame,
     dest: &sst::LocalVar,
     s: &sst::Struct,
     exprs: &[sst::Expression],
@@ -78,7 +78,7 @@ fn gen_struct<W: Write>(
     Ok(())
 }
 
-fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) -> Result<()> {
+fn gen_integer(frame: &mut Frame, dest: &sst::LocalVar, num: i128) -> Result<()> {
     let size = dest.typ.size;
 
     let w = &mut frame.w;
@@ -93,8 +93,8 @@ fn gen_integer<W: Write>(frame: &mut Frame<W>, dest: &sst::LocalVar, num: i128) 
     gen_store(frame, dest, 0)
 }
 
-fn gen_binop<W: Write>(
-    frame: &mut Frame<W>,
+fn gen_binop(
+    frame: &mut Frame,
     dest: &sst::LocalVar,
     lhs: &sst::LocalVar,
     op: sst::BinOp,
@@ -160,8 +160,8 @@ fn gen_binop<W: Write>(
     gen_store(frame, dest, 0)
 }
 
-fn gen_copy<W: Write>(
-    frame: &mut Frame<W>,
+fn gen_copy(
+    frame: &mut Frame,
     dest: &sst::LocalVar,
     src: &sst::LocalVar,
 ) -> Result<()> {
@@ -177,8 +177,8 @@ fn gen_copy<W: Write>(
     gen_store(frame, dest, 0)
 }
 
-fn gen_expr_to<W: Write>(
-    frame: &mut Frame<W>,
+fn gen_expr_to(
+    frame: &mut Frame,
     expr: &sst::Expression,
     loc: &sst::LocalVar,
 ) -> Result<()> {
@@ -327,7 +327,7 @@ fn gen_expr_to<W: Write>(
     Ok(())
 }
 
-fn gen_expr<W: Write>(frame: &mut Frame<W>, expr: &sst::Expression) -> Result<MaybeTemp> {
+fn gen_expr(frame: &mut Frame, expr: &sst::Expression) -> Result<MaybeTemp> {
     match &expr.kind {
         sst::ExprKind::Variable(var) => {
             writeln!(&mut frame.w, "\t// <Expression::Variable />")?;
@@ -379,7 +379,7 @@ fn gen_expr<W: Write>(frame: &mut Frame<W>, expr: &sst::Expression) -> Result<Ma
     }
 }
 
-fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
+fn gen_return(frame: &mut Frame) -> Result<()> {
     // Read the return address into bl if necessary, and ret
     if !frame.func.is_leaf {
         writeln!(
@@ -392,7 +392,7 @@ fn gen_return<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     Ok(())
 }
 
-fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()> {
+fn gen_stmt(frame: &mut Frame, stmt: &sst::Statement) -> Result<()> {
     match stmt {
         sst::Statement::If(cond, body, else_body) => {
             writeln!(&mut frame.w, "\t// <Statement::If>")?;
@@ -487,7 +487,7 @@ fn gen_stmt<W: Write>(frame: &mut Frame<W>, stmt: &sst::Statement) -> Result<()>
     Ok(())
 }
 
-fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
+fn gen_func(frame: &mut Frame) -> Result<()> {
     common::gen_signature_comment(&mut frame.w, &frame.func.signature)?;
     writeln!(frame.w, ".global awe${}", frame.func.signature.name)?;
     writeln!(frame.w, ".balign 4")?;
@@ -521,7 +521,7 @@ fn gen_func<W: Write>(frame: &mut Frame<W>) -> Result<()> {
     Ok(())
 }
 
-pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
+pub fn codegen(w: &mut dyn Write, prog: &sst::Program) -> Result<()> {
     let sentinel = Rc::new(sst::Type {
         name: Rc::new("<sentinel>".to_owned()),
         size: 0,
@@ -532,7 +532,6 @@ pub fn codegen<W: Write>(mut w: W, prog: &sst::Program) -> Result<()> {
     for func in &prog.functions {
         let mut frame = Frame::new(w, func, sentinel.clone());
         gen_func(&mut frame)?;
-        w = frame.done();
     }
 
     writeln!(w, "// Strings")?;

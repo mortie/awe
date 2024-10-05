@@ -78,9 +78,9 @@ pub struct TempVar {
     frame_offset: usize,
 }
 
-pub struct Frame<'a, W: Write> {
-    pub w: W,
-    pub func: &'a sst::Function,
+pub struct Frame<'a, 'b> {
+    pub w: &'a mut dyn Write,
+    pub func: &'b sst::Function,
     stack_size: usize,
     temps: Vec<TempVar>,
     sentinel: Rc<sst::Type>,
@@ -88,8 +88,8 @@ pub struct Frame<'a, W: Write> {
     loops: Vec<Loop>,
 }
 
-impl<'a, W: Write> Frame<'a, W> {
-    pub fn new(w: W, func: &'a sst::Function, sentinel: Rc<sst::Type>) -> Self {
+impl<'a, 'b> Frame<'a, 'b> {
+    pub fn new(w: &'a mut dyn Write, func: &'b sst::Function, sentinel: Rc<sst::Type>) -> Self {
         let stack_size = func.stack_size;
         Self {
             w,
@@ -208,10 +208,6 @@ impl<'a, W: Write> Frame<'a, W> {
 
     pub fn pop_loop(&mut self) {
         self.loops.pop();
-    }
-
-    pub fn done(self) -> W {
-        self.w
     }
 }
 

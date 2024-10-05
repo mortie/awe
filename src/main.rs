@@ -62,7 +62,7 @@ impl TempFile {
 }
 
 fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> Result<()> {
-    let Some(backend) = backend::get_backend::<W>(target) else {
+    let Some(backend) = backend::get_backend(target) else {
         return Err(format!("No backend for target '{target}'").into());
     };
 
@@ -71,7 +71,7 @@ fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> R
     writeln!(w, "// <PRELUDE>")?;
     writeln!(w)?;
 
-    (backend.codegen)(w, prog)?;
+    (backend.codegen)(&mut w, prog)?;
     Ok(())
 }
 

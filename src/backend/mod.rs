@@ -6,23 +6,21 @@ pub mod preludes;
 
 mod common;
 
-type CodegenFn<W> = dyn Fn(W, &sst::Program) -> common::Result<()>;
-
-pub struct Backend<W: Write> {
+pub struct Backend {
     pub prelude: &'static str,
-    pub codegen: Box<CodegenFn<W>>,
+    pub codegen: fn(&mut dyn Write, &sst::Program) -> common::Result<()>,
 }
 
-pub fn get_backend<W: Write>(target: &str) -> Option<Backend<W>> {
+pub fn get_backend(target: &str) -> Option<Backend> {
     match target {
         "macos-aarch64" => Some(Backend {
             prelude: preludes::DARWIN_AARCH64,
-            codegen: Box::new(|w: W, p| aarch64::codegen(w, p)),
+            codegen: aarch64::codegen,
         }),
 
         "linux-aarch64" => Some(Backend {
             prelude: preludes::LINUX_AARCH64,
-            codegen: Box::new(|w: W, p| aarch64::codegen(w, p)),
+            codegen: aarch64::codegen,
         }),
 
         _ => None,
