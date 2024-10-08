@@ -239,6 +239,7 @@ struct Context {
     decls: HashMap<Rc<String>, sst::Declaration>,
     underscore: Rc<String>,
     types: Types,
+    struct_templates: HashMap<Rc<String>, ast::StructDecl>,
     string_constant_map: HashMap<Rc<String>, sst::StringConstant>,
     string_constants: Vec<(sst::StringConstant, Rc<String>)>,
 }
@@ -249,6 +250,7 @@ impl Context {
             decls: HashMap::new(),
             underscore: Rc::new("_".to_owned()),
             types,
+            struct_templates: HashMap::new(),
             string_constant_map: HashMap::new(),
             string_constants: Vec::new(),
         };
@@ -340,7 +342,66 @@ fn get_type(
         return Err(AnalysisError::UndeclaredType(ident));
     }
 
-    // TODO: Support type templates
+    if let Some(st) = ctx.struct_templates.get(&ident) {
+        let st = st.clone();
+        if spec.params.len() != st.type_params.len() {
+            return Err(AnalysisError::BadParamCount(
+                st.type_params.len(),
+                spec.params.len(),
+            ));
+        }
+
+        let mut tname = st.name.as_ref().clone();
+        tname += "[";
+
+        let mut types = HashMap::<Rc<String>, Rc<sst::Type>>::new();
+        for (i, param) in spec.params.iter().enumerate() {
+
+            let name = &st.type_params[i];
+            let ast::TypeParam::Type(subspec) = param;
+            let typ = get_type(ctx, subspec, scope)?;
+            if i != 0 {
+                tname += ",";
+            }
+            tname += &typ.name;
+
+            types.insert(name.clone(), typ);
+        }
+
+        tname += "]";
+        let tname = Rc::new(tname);
+
+        if let Some(sst::Declaration::Type(typ)) = ctx.decls.get(&tname) {
+            return Ok(typ.clone());
+        }
+
+        let void = ctx.types.void.clone();
+        let struct_scope = Scope {
+            frame: StackFrame::new(ctx, void),
+            parent: None,
+            vars: RefCell::new(HashMap::new()),
+            types: RefCell::new(types),
+            offset: RefCell::new(0),
+            props: RefCell::new(ScopeProps::new()),
+        };
+
+        let info = analyze_field_decls(
+            struct_scope.frame.borrow_mut().ctx, &st.fields, Some(&struct_scope))?;
+        let fields = info.fields;
+
+        let typ = Rc::new(sst::Type {
+            name: tname.clone(),
+            size: info.size,
+            align: info.align,
+            kind: sst::TypeKind::Struct(Rc::new(sst::Struct {
+                name: tname.clone(),
+                fields,
+                methods: HashMap::new(),
+            })),
+        });
+        ctx.decls.insert(tname, sst::Declaration::Type(typ.clone()));
+        return Ok(typ);
+    }
 
     Err(AnalysisError::UndeclaredType(ident))
 }
@@ -410,8 +471,14 @@ fn analyze_field_decls(
 
 fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
     let name = sd.name.clone();
-    if ctx.decls.contains_key(&name) {
+    if ctx.decls.contains_key(&name) || ctx.struct_templates.contains_key(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
+    }
+
+    // Templates must be dealt with later
+    if !sd.type_params.is_empty() {
+        ctx.struct_templates.insert(name, sd.clone());
+        return Ok(());
     }
 
     let info = analyze_field_decls(ctx, &sd.fields, None)?;

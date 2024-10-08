@@ -270,6 +270,7 @@ pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
     let ident = qualified_ident(r)?;
     let mut params = Vec::<ast::TypeParam>::new();
 
+    whitespace(r);
     if r.peek_cmp_consume(b"[") {
         loop {
             params.push(ast::TypeParam::Type(Box::new(type_spec(r)?)));
@@ -1036,7 +1037,27 @@ pub fn field_decls(r: &mut Reader) -> Result<Vec<ast::FieldDecl>> {
     }
 }
 
-/// StructDecl ::= 'struct' Ident '{' FieldDecls '}'
+/// FormalTypeParams ::= (Ident ',')* (Ident ','?)?
+pub fn formal_type_params(r: &mut Reader) -> Result<Vec<ast::Ident>> {
+    let mut params = Vec::<ast::Ident>::new();
+
+    loop {
+        let point = r.tell();
+        let Ok(param) = identifier(r) else {
+            r.seek(point);
+            return Ok(params);
+        };
+
+        params.push(param);
+        whitespace(r);
+
+        if !r.peek_cmp_consume(b",") {
+            return Ok(params);
+        }
+    }
+}
+
+/// StructDecl ::= 'struct' Ident ('[' FormalTypeParams '])?' '{' FieldDecls '}'
 fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
     let keyword = identifier(r)?;
     if keyword.as_str() != "struct" {
@@ -1044,20 +1065,30 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
     }
 
     let name = identifier(r)?;
-    whitespace(r);
 
+    let mut type_params = Vec::<ast::Ident>::new();
+    whitespace(r);
+    if r.peek_cmp_consume(b"[") {
+        type_params = formal_type_params(r)?;
+        whitespace(r);
+        if !r.peek_cmp_consume(b"]") {
+            return Err(ParseError::expected_char(r, b']'));
+        }
+    }
+
+    whitespace(r);
     if !r.peek_cmp_consume(b"{") {
         return Err(ParseError::expected_char(r, b'{'));
     }
 
     let fields = field_decls(r)?;
-    whitespace(r);
 
+    whitespace(r);
     if !r.peek_cmp_consume(b"}") {
         return Err(ParseError::expected_char(r, b'{'));
     }
 
-    Ok(ast::Declaration::Struct(ast::StructDecl { name, fields }))
+    Ok(ast::Declaration::Struct(ast::StructDecl { name, fields, type_params }))
 }
 
 /// FuncSignature ::= 'func' QualifiedIdent '(' FieldDecls ')' TypeSpec
