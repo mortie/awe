@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::rc::Rc;
 
+use super::context::{Context, Types};
 use super::sst;
 use crate::parser::ast;
 
@@ -23,6 +24,8 @@ pub enum AnalysisError {
     BadCast(Rc<sst::Type>, Rc<sst::Type>),
     ExpectedStruct(Rc<sst::Type>),
     BadStructInitializerName(Rc<String>, Rc<String>),
+
+    InternalError(String),
 
     FunctionCtx(Rc<String>, Box<AnalysisError>),
 
@@ -62,6 +65,8 @@ impl Display for AnalysisError {
                 write!(f, "Expected initializer for {expected} here, got {got}")
             }
 
+            InternalError(msg) => write!(f, "Internal error: {msg}"),
+
             FunctionCtx(name, err) => write!(f, "In function {name}: {err}"),
 
             Unimplemented => write!(f, "Feature not implemented"),
@@ -85,17 +90,17 @@ impl ScopeProps {
     }
 }
 
-struct Scope<'a> {
-    frame: Rc<RefCell<StackFrame<'a>>>,
-    parent: Option<Rc<Scope<'a>>>,
+struct Scope {
+    frame: Rc<RefCell<StackFrame>>,
+    parent: Option<Rc<Scope>>,
     vars: RefCell<HashMap<Rc<String>, Rc<sst::LocalVar>>>,
     types: RefCell<HashMap<Rc<String>, Rc<sst::Type>>>,
     offset: RefCell<usize>,
     props: RefCell<ScopeProps>,
 }
 
-impl<'a> Scope<'a> {
-    fn new(frame: Rc<RefCell<StackFrame<'a>>>) -> Rc<Self> {
+impl Scope {
+    fn new(frame: Rc<RefCell<StackFrame>>) -> Rc<Self> {
         Rc::new(Self {
             frame,
             parent: None,
@@ -106,7 +111,7 @@ impl<'a> Scope<'a> {
         })
     }
 
-    fn from_parent(parent: Rc<Scope<'a>>) -> Rc<Self> {
+    fn from_parent(parent: Rc<Scope>) -> Rc<Self> {
         let offset = *parent.offset.borrow();
         Rc::new(Self {
             frame: parent.frame.clone(),
@@ -189,13 +194,13 @@ impl<'a> Scope<'a> {
     }
 
     fn get_type(&self, spec: &ast::TypeSpec) -> Result<Rc<sst::Type>> {
-        get_type(self.frame.borrow_mut().ctx, spec, Some(self))
+        get_type(&self.frame.borrow_mut().ctx, spec, Some(self))
     }
 
     fn get_func_sig(&self, ident: &ast::QualifiedIdent) -> Result<Rc<sst::FuncSignature>> {
         let name = ident_to_name(ident);
         let frame = self.frame.borrow();
-        let Some(decl) = frame.ctx.decls.get(&name) else {
+        let Some(decl) = frame.ctx.get_decl(&name) else {
             return Err(AnalysisError::UndeclaredFunction(name));
         };
 
@@ -207,87 +212,15 @@ impl<'a> Scope<'a> {
     }
 }
 
-struct StackFrame<'a> {
-    ctx: &'a mut Context,
+struct StackFrame {
+    ctx: Rc<Context>,
     size: usize,
     ret: Rc<sst::Type>,
 }
 
-impl<'a> StackFrame<'a> {
-    fn new(ctx: &'a mut Context, ret: Rc<sst::Type>) -> Rc<RefCell<Self>> {
+impl StackFrame {
+    fn new(ctx: Rc<Context>, ret: Rc<sst::Type>) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self { ctx, size: 0, ret }))
-    }
-}
-
-struct Types {
-    void: Rc<sst::Type>,
-    bool: Rc<sst::Type>,
-    byte: Rc<sst::Type>,
-    short: Rc<sst::Type>,
-    ushort: Rc<sst::Type>,
-    int: Rc<sst::Type>,
-    uint: Rc<sst::Type>,
-    long: Rc<sst::Type>,
-    ulong: Rc<sst::Type>,
-    float: Rc<sst::Type>,
-    double: Rc<sst::Type>,
-    voidptr: Rc<sst::Type>,
-    byteptr: Rc<sst::Type>,
-}
-
-struct Context {
-    decls: HashMap<Rc<String>, sst::Declaration>,
-    underscore: Rc<String>,
-    types: Types,
-    struct_templates: HashMap<Rc<String>, ast::StructDecl>,
-    string_constant_map: HashMap<Rc<String>, sst::StringConstant>,
-    string_constants: Vec<(sst::StringConstant, Rc<String>)>,
-}
-
-impl Context {
-    fn new(types: Types) -> Self {
-        let mut ctx = Self {
-            decls: HashMap::new(),
-            underscore: Rc::new("_".to_owned()),
-            types,
-            struct_templates: HashMap::new(),
-            string_constant_map: HashMap::new(),
-            string_constants: Vec::new(),
-        };
-
-        ctx.add_type(ctx.types.void.clone());
-        ctx.add_type(ctx.types.byte.clone());
-        ctx.add_type(ctx.types.bool.clone());
-        ctx.add_type(ctx.types.short.clone());
-        ctx.add_type(ctx.types.ushort.clone());
-        ctx.add_type(ctx.types.int.clone());
-        ctx.add_type(ctx.types.uint.clone());
-        ctx.add_type(ctx.types.long.clone());
-        ctx.add_type(ctx.types.ulong.clone());
-        ctx.add_type(ctx.types.float.clone());
-        ctx.add_type(ctx.types.double.clone());
-        ctx.add_type(ctx.types.byteptr.clone());
-        ctx.add_type(ctx.types.voidptr.clone());
-
-        ctx
-    }
-
-    fn add_type(&mut self, typ: Rc<sst::Type>) {
-        self.decls
-            .insert(typ.name.clone(), sst::Declaration::Type(typ));
-    }
-
-    fn add_string(&mut self, str: Rc<String>) -> sst::StringConstant {
-        if let Some(sc) = self.string_constant_map.get(&str) {
-            return *sc;
-        }
-
-        let sc = sst::StringConstant {
-            index: self.string_constants.len() as u32,
-        };
-        self.string_constant_map.insert(str.clone(), sc);
-        self.string_constants.push((sc, str));
-        sc
     }
 }
 
@@ -313,7 +246,7 @@ fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
 }
 
 fn get_type(
-    ctx: &mut Context,
+    ctx: &Rc<Context>,
     spec: &ast::TypeSpec,
     scope: Option<&Scope>,
 ) -> Result<Rc<sst::Type>> {
@@ -334,7 +267,7 @@ fn get_type(
             return Ok(typ);
         }
 
-        if let Some(sst::Declaration::Type(typ)) = ctx.decls.get(&ident) {
+        if let Some(sst::Declaration::Type(typ)) = ctx.get_decl(&ident) {
             return Ok(typ.clone());
         }
 
@@ -342,7 +275,7 @@ fn get_type(
         return Err(AnalysisError::UndeclaredType(ident));
     }
 
-    if let Some(st) = ctx.struct_templates.get(&ident) {
+    if let Some(st) = ctx.get_struct_template(&ident) {
         let st = st.clone();
         if spec.params.len() != st.type_params.len() {
             return Err(AnalysisError::BadParamCount(
@@ -356,7 +289,6 @@ fn get_type(
 
         let mut types = HashMap::<Rc<String>, Rc<sst::Type>>::new();
         for (i, param) in spec.params.iter().enumerate() {
-
             let name = &st.type_params[i];
             let ast::TypeParam::Type(subspec) = param;
             let typ = get_type(ctx, subspec, scope)?;
@@ -371,13 +303,13 @@ fn get_type(
         tname += "]";
         let tname = Rc::new(tname);
 
-        if let Some(sst::Declaration::Type(typ)) = ctx.decls.get(&tname) {
+        if let Some(sst::Declaration::Type(typ)) = ctx.get_decl(&tname) {
             return Ok(typ.clone());
         }
 
         let void = ctx.types.void.clone();
         let struct_scope = Scope {
-            frame: StackFrame::new(ctx, void),
+            frame: StackFrame::new(ctx.clone(), void),
             parent: None,
             vars: RefCell::new(HashMap::new()),
             types: RefCell::new(types),
@@ -386,7 +318,10 @@ fn get_type(
         };
 
         let info = analyze_field_decls(
-            struct_scope.frame.borrow_mut().ctx, &st.fields, Some(&struct_scope))?;
+            &struct_scope.frame.borrow_mut().ctx,
+            &st.fields,
+            Some(&struct_scope),
+        )?;
         let fields = info.fields;
 
         let typ = Rc::new(sst::Type {
@@ -399,16 +334,16 @@ fn get_type(
                 methods: HashMap::new(),
             })),
         });
-        ctx.decls.insert(tname, sst::Declaration::Type(typ.clone()));
+        ctx.add_decl(tname, sst::Declaration::Type(typ.clone()));
         return Ok(typ);
     }
 
     Err(AnalysisError::UndeclaredType(ident))
 }
 
-fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
+fn make_pointer_to(ctx: &Rc<Context>, typ: Rc<sst::Type>) -> Rc<sst::Type> {
     let name = Rc::new(format!("ptr[{}]", typ.name));
-    if let Some(sst::Declaration::Type(typ)) = &ctx.decls.get(&name) {
+    if let Some(sst::Declaration::Type(typ)) = ctx.get_decl(&name) {
         return typ.clone();
     }
 
@@ -418,12 +353,12 @@ fn make_pointer_to(ctx: &mut Context, typ: Rc<sst::Type>) -> Rc<sst::Type> {
         align: 8,
         kind: sst::TypeKind::Pointer(typ),
     });
-    ctx.decls.insert(name, sst::Declaration::Type(ptr.clone()));
+    ctx.add_decl(name, sst::Declaration::Type(ptr.clone()));
     ptr
 }
 
 fn analyze_field_decls(
-    ctx: &mut Context,
+    ctx: &Rc<Context>,
     field_decls: &[ast::FieldDecl],
     scope: Option<&Scope>,
 ) -> Result<sst::FieldDecls> {
@@ -469,15 +404,15 @@ fn analyze_field_decls(
     })
 }
 
-fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
+fn analyze_struct_decl(ctx: &Rc<Context>, sd: &ast::StructDecl) -> Result<()> {
     let name = sd.name.clone();
-    if ctx.decls.contains_key(&name) || ctx.struct_templates.contains_key(&name) {
+    if ctx.has_decl(&name) || ctx.has_struct_template(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
     // Templates must be dealt with later
     if !sd.type_params.is_empty() {
-        ctx.struct_templates.insert(name, sd.clone());
+        ctx.add_struct_template(name, sd.clone());
         return Ok(());
     }
 
@@ -495,7 +430,7 @@ fn analyze_struct_decl(ctx: &mut Context, sd: &ast::StructDecl) -> Result<()> {
         })),
     });
 
-    ctx.decls.insert(name, sst::Declaration::Type(typ));
+    ctx.add_decl(name, sst::Declaration::Type(typ));
     Ok(())
 }
 
@@ -601,8 +536,8 @@ fn analyze_literal(
         }
 
         ast::LiteralExpr::String(str) => {
-            let mut frame = scope.frame.borrow_mut();
-            let sc = frame.ctx.add_string(str.clone());
+            let frame = scope.frame.borrow_mut();
+            let sc = frame.ctx.add_string(&str);
             Ok(sst::Expression {
                 typ: frame.ctx.types.byteptr.clone(),
                 kind: sst::ExprKind::Literal(sst::Literal::String(sc)),
@@ -829,7 +764,7 @@ fn analyze_expression_non_typechecked(
         ast::Expression::Reference(expr) => {
             let sst_expr = analyze_expression(scope.clone(), expr, None)?;
             sst::Expression {
-                typ: make_pointer_to(scope.frame.borrow_mut().ctx, sst_expr.typ.clone()),
+                typ: make_pointer_to(&scope.frame.borrow_mut().ctx, sst_expr.typ.clone()),
                 kind: sst::ExprKind::Reference(Box::new(sst_expr)),
             }
         }
@@ -1013,9 +948,9 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
     Ok(sst_stmts)
 }
 
-fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
+fn analyze_func_decl(ctx: &Rc<Context>, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
     let name = ident_to_name(&fd.signature.ident);
-    if ctx.decls.contains_key(&name) {
+    if ctx.has_decl(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
@@ -1026,7 +961,7 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     let return_type = get_type(ctx, &fd.signature.ret, None)?;
     let voidptr_type = ctx.types.voidptr.clone();
 
-    let frame = StackFrame::new(ctx, return_type.clone());
+    let frame = StackFrame::new(ctx.clone(), return_type.clone());
     let root_scope = Scope::new(frame.clone());
     let underscore = frame.borrow().ctx.underscore.clone();
 
@@ -1069,17 +1004,16 @@ fn analyze_func_decl(ctx: &mut Context, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
         return Err(AnalysisError::NonVoidFunctionMustReturn);
     }
 
-    ctx.decls
-        .insert(name, sst::Declaration::Function(func.clone()));
+    ctx.add_decl(name, sst::Declaration::Function(func.clone()));
     Ok(func)
 }
 
 fn analyze_extern_func_decl(
-    ctx: &mut Context,
+    ctx: &Rc<Context>,
     efd: &ast::FuncSignature,
 ) -> Result<Rc<sst::FuncSignature>> {
     let name = ident_to_name(&efd.ident);
-    if ctx.decls.contains_key(&name) {
+    if ctx.has_decl(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
@@ -1092,8 +1026,7 @@ fn analyze_extern_func_decl(
         ret,
     });
 
-    ctx.decls
-        .insert(name, sst::Declaration::ExternFunc(extern_func.clone()));
+    ctx.add_decl(name, sst::Declaration::ExternFunc(extern_func.clone()));
     Ok(extern_func)
 }
 
@@ -1135,7 +1068,7 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         }),
     };
 
-    let mut ctx = Context::new(types);
+    let mut ctx = Rc::new(Context::new(types));
 
     let mut functions = Vec::<Rc<sst::Function>>::new();
     for decl in prog {
@@ -1160,8 +1093,14 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         }
     }
 
+    let Some(ctx) = Rc::into_inner(ctx) else {
+        return Err(AnalysisError::InternalError(
+            "Failed to make ctx mutable".into(),
+        ));
+    };
+
     Ok(sst::Program {
         functions,
-        strings: ctx.string_constants,
+        strings: ctx.done(),
     })
 }

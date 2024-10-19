@@ -1088,7 +1088,11 @@ fn struct_decl(r: &mut Reader) -> Result<ast::Declaration> {
         return Err(ParseError::expected_char(r, b'{'));
     }
 
-    Ok(ast::Declaration::Struct(ast::StructDecl { name, fields, type_params }))
+    Ok(ast::Declaration::Struct(ast::StructDecl {
+        name,
+        fields,
+        type_params,
+    }))
 }
 
 /// FuncSignature ::= 'func' QualifiedIdent '(' FieldDecls ')' TypeSpec

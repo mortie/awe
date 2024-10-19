@@ -145,7 +145,7 @@ pub enum Statement {
     Empty,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Declaration {
     Type(Rc<Type>),
     Function(Rc<Function>),
