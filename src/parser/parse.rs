@@ -684,7 +684,30 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
     Err(comb.err())
 }
 
-/// Accessor ::= '&' | '.' Ident
+/// MemberAccessOrCall ::= '.' Ident ('(' ExprList ')')?
+fn member_access_or_call_after_dot(
+    r: &mut Reader,
+    subject: ast::Expression,
+) -> Result<ast::Expression> {
+    let sub = Box::new(subject);
+    let ident = require("identifier", identifier(r))?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b"(") {
+        return Ok(ast::Expression::MemberAccess(sub, ident));
+    }
+
+    let params = expr_list(r)?;
+
+    whitespace(r);
+    if !r.peek_cmp_consume(b")") {
+        return Err(ParseError::expected_char(r, b')'));
+    }
+
+    Ok(ast::Expression::MethodCall(sub, ident, params))
+}
+
+/// Accessor ::= '&' | '*' | '.' Ident ('(' ExprList ')')?
 /// ExpressionPart ::= ExpressionAtom Accessor* Expression?
 pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
     let mut expr = expression_atom(r)?;
@@ -694,10 +717,11 @@ pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
         if r.peek_cmp_consume(b"&") {
             let sub = Box::new(expr);
             expr = ast::Expression::Reference(sub);
-        } else if r.peek_cmp_consume(b".") {
+        } else if r.peek_cmp_consume(b"*") {
             let sub = Box::new(expr);
-            let ident = require("identifier", identifier(r))?;
-            expr = ast::Expression::MemberAccess(sub, ident);
+            expr = ast::Expression::Dereference(sub);
+        } else if r.peek_cmp_consume(b".") {
+            expr = member_access_or_call_after_dot(r, expr)?;
         } else {
             break;
         }
@@ -780,7 +804,7 @@ pub fn eq_level_expr(r: &mut Reader) -> Result<ast::Expression> {
     }
 }
 
-/// Expression ::= EqLevelExpr
+/// Expression ::= EqLevelExpr ExprSuffix?
 pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
     eq_level_expr(r)
 }

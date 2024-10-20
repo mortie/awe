@@ -23,6 +23,7 @@ pub enum AnalysisError {
     NonVoidFunctionMustReturn,
     BadCast(Rc<sst::Type>, Rc<sst::Type>),
     ExpectedStruct(Rc<sst::Type>),
+    ExpectedPointer(Rc<sst::Type>),
     BadStructInitializerName(Rc<String>, Rc<String>),
 
     InternalError(String),
@@ -61,6 +62,7 @@ impl Display for AnalysisError {
             NonVoidFunctionMustReturn => write!(f, "Non-void function must return a value"),
             BadCast(from, to) => write!(f, "Illegal cast from {} to {}", from.name, to.name),
             ExpectedStruct(got) => write!(f, "Expecetd struct, got non-struct {}", got.name),
+            ExpectedPointer(got) => write!(f, "Expecetd pointer, got non-pointer {}", got.name),
             BadStructInitializerName(expected, got) => {
                 write!(f, "Expected initializer for {expected} here, got {got}")
             }
@@ -197,18 +199,24 @@ impl Scope {
         get_type(&self.frame.borrow_mut().ctx, spec, Some(self))
     }
 
-    fn get_func_sig(&self, name: &ast::FuncName) -> Result<Rc<sst::FuncSignature>> {
-        let name = func_to_name(name);
+    fn get_func_sig_from_name(
+        &self,
+        name: &Rc<String>,
+    ) -> Result<Rc<sst::FuncSignature>> {
         let frame = self.frame.borrow();
         let Some(decl) = frame.ctx.get_decl(&name) else {
-            return Err(AnalysisError::UndeclaredFunction(name));
+            return Err(AnalysisError::UndeclaredFunction(name.clone()));
         };
 
         match decl {
             sst::Declaration::Function(func) => Ok(func.signature.clone()),
             sst::Declaration::ExternFunc(sig) => Ok(sig.clone()),
-            _ => Err(AnalysisError::UndeclaredFunction(name)),
+            _ => Err(AnalysisError::UndeclaredFunction(name.clone())),
         }
+    }
+
+    fn get_func_sig(&self, name: &ast::FuncName) -> Result<Rc<sst::FuncSignature>> {
+        self.get_func_sig_from_name(&func_to_name(name))
     }
 }
 
@@ -270,7 +278,7 @@ fn get_type(
 
         let ast::TypeParam::Type(typ) = &spec.params[0];
         let typ = get_type(ctx, typ, scope)?;
-        return Ok(make_pointer_to(ctx, typ));
+        return Ok(make_pointer_to(ctx, &typ));
     }
 
     if spec.params.is_empty() {
@@ -352,7 +360,7 @@ fn get_type(
     Err(AnalysisError::UndeclaredType(ident.clone()))
 }
 
-fn make_pointer_to(ctx: &Rc<Context>, typ: Rc<sst::Type>) -> Rc<sst::Type> {
+fn make_pointer_to(ctx: &Rc<Context>, typ: &Rc<sst::Type>) -> Rc<sst::Type> {
     let name = Rc::new(format!("ptr[{}]", typ.name));
     if let Some(sst::Declaration::Type(typ)) = ctx.get_decl(&name) {
         return typ.clone();
@@ -362,7 +370,7 @@ fn make_pointer_to(ctx: &Rc<Context>, typ: Rc<sst::Type>) -> Rc<sst::Type> {
         name: name.clone(),
         size: 8,
         align: 8,
-        kind: sst::TypeKind::Pointer(typ),
+        kind: sst::TypeKind::Pointer(typ.clone()),
     });
     ctx.add_decl(name, sst::Declaration::Type(ptr.clone()));
     ptr
@@ -456,7 +464,7 @@ fn appropriate_int_type_for_num(types: &Types, num: i128) -> Result<Rc<sst::Type
 }
 
 fn analyze_literal(
-    scope: Rc<Scope>,
+    scope: &Rc<Scope>,
     literal: &ast::LiteralExpr,
     inferred: Option<Rc<sst::Type>>,
 ) -> Result<sst::Expression> {
@@ -489,7 +497,7 @@ fn analyze_literal(
                 }
 
                 exprs.push(analyze_expression(
-                    scope.clone(),
+                    scope,
                     &initializer.expr,
                     Some(decl.typ.clone()),
                 )?);
@@ -576,6 +584,10 @@ fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
 
     let is_pointer = |x: &sst::TypeKind| matches!(x, sst::TypeKind::Pointer(..));
 
+    let is_ulong = |x: &sst::Type| {
+        x.size == 8 && matches!(x.kind, sst::TypeKind::Primitive(sst::Primitive::UInt))
+    };
+
     if is_integral(&from.kind) && is_integral(&to.kind) {
         return Ok(());
     }
@@ -584,11 +596,19 @@ fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
         return Ok(());
     }
 
+    if is_pointer(&from.kind) && is_ulong(&to) {
+        return Ok(())
+    }
+
+    if is_ulong(&from) && is_pointer(&to.kind) {
+        return Ok(())
+    }
+
     Err(AnalysisError::BadCast(from.clone(), to.clone()))
 }
 
 fn analyze_func_call(
-    scope: Rc<Scope>,
+    scope: &Rc<Scope>,
     name: &ast::FuncName,
     params: &[ast::Expression],
 ) -> Result<sst::Expression> {
@@ -637,7 +657,7 @@ fn analyze_func_call(
     let mut exprs = Vec::<sst::Expression>::with_capacity(len);
     for (i, field) in sig.params.fields.iter().enumerate() {
         exprs.push(analyze_expression(
-            scope.clone(),
+            &scope,
             &params[i],
             Some(field.typ.clone()),
         )?);
@@ -652,13 +672,13 @@ fn analyze_func_call(
 }
 
 fn analyze_expression_non_typechecked(
-    scope: Rc<Scope>,
+    scope: &Rc<Scope>,
     expr: &ast::Expression,
     inferred: Option<Rc<sst::Type>>,
 ) -> Result<sst::Expression> {
     let expr = match expr {
         ast::Expression::Literal(literal) => {
-            analyze_literal(scope.clone(), literal, inferred.clone())?
+            analyze_literal(scope, literal, inferred.clone())?
         }
 
         ast::Expression::FuncCall(ident, params) => analyze_func_call(scope, ident, params)?,
@@ -755,13 +775,13 @@ fn analyze_expression_non_typechecked(
             };
 
             let mut sst_lhs = Box::new(analyze_expression_non_typechecked(
-                scope.clone(),
+                scope,
                 lhs,
                 subexpr_type,
             )?);
 
             let mut sst_rhs = Box::new(analyze_expression(
-                scope.clone(),
+                scope,
                 rhs,
                 Some(sst_lhs.typ.clone()),
             )?);
@@ -777,15 +797,28 @@ fn analyze_expression_non_typechecked(
         }
 
         ast::Expression::Reference(expr) => {
-            let sst_expr = analyze_expression(scope.clone(), expr, None)?;
+            let sst_expr = analyze_expression(scope, expr, None)?;
+
             sst::Expression {
-                typ: make_pointer_to(&scope.frame.borrow_mut().ctx, sst_expr.typ.clone()),
+                typ: make_pointer_to(&scope.frame.borrow_mut().ctx, &sst_expr.typ),
                 kind: sst::ExprKind::Reference(Box::new(sst_expr)),
             }
         }
 
+        ast::Expression::Dereference(expr) => {
+            let sst_expr = analyze_expression(scope, expr, None)?;
+            let typ = match &sst_expr.typ.kind {
+                sst::TypeKind::Pointer(typ) => typ.clone(),
+                _ => return Err(AnalysisError::ExpectedPointer(sst_expr.typ.clone())),
+            };
+            sst::Expression {
+                typ,
+                kind: sst::ExprKind::Dereference(Box::new(sst_expr)),
+            }
+        }
+
         ast::Expression::MemberAccess(expr, ident) => {
-            let sst_expr = analyze_expression(scope.clone(), expr, None)?;
+            let sst_expr = analyze_expression(scope, expr, None)?;
             let sst::TypeKind::Struct(s) = &sst_expr.typ.kind else {
                 return Err(AnalysisError::ExpectedStruct(sst_expr.typ.clone()));
             };
@@ -794,9 +827,62 @@ fn analyze_expression_non_typechecked(
                 return Err(AnalysisError::UndeclaredMember(ident.clone()));
             };
 
+            // If the subject is already a dereference,
+            // generate a DerefAccess instead of a Dereference + MemberAccess
+            match &sst_expr.kind {
+                sst::ExprKind::Dereference(subexpr) => sst::Expression {
+                    typ: field.typ.clone(),
+                    kind: sst::ExprKind::DerefAccess(subexpr.clone(), field),
+                },
+                _ => sst::Expression {
+                    typ: field.typ.clone(),
+                    kind: sst::ExprKind::MemberAccess(Box::new(sst_expr), field),
+                },
+            }
+        }
+
+        ast::Expression::MethodCall(subject, ident, params) => {
+            let sst_subject = analyze_expression(scope, subject, None)?;
+            let func_name = Rc::new(format!("{}::{}", sst_subject.typ.name, ident));
+
+            // If the subject is already a dereference, don't referenc it again,
+            // just use the pointer we already have
+            let subject_ptr = match sst_subject.kind {
+                sst::ExprKind::Dereference(subexpr) => subexpr.as_ref().clone(),
+                _ => sst::Expression {
+                    typ: make_pointer_to(&scope.frame.borrow().ctx, &sst_subject.typ),
+                    kind: sst::ExprKind::Reference(Box::new(sst_subject)),
+                },
+            };
+
+            let sig = scope.get_func_sig_from_name(&func_name)?;
+
+            let len = sig.params.fields.len();
+            if len != params.len() + 1 {
+                return Err(AnalysisError::BadParamCount(len, params.len() + 1));
+            }
+
+            let expected_subject_typ = sig.params.fields.first().unwrap().typ.clone();
+            if !Rc::ptr_eq(&expected_subject_typ, &subject_ptr.typ) {
+                return Err(AnalysisError::TypeConflict(
+                    expected_subject_typ, subject_ptr.typ.clone()));
+            }
+
+            let mut exprs = Vec::<sst::Expression>::with_capacity(params.len() + 1);
+            exprs.push(subject_ptr);
+            for (i, field) in sig.params.fields.iter().skip(1).enumerate() {
+                exprs.push(analyze_expression(
+                    scope,
+                    &params[i],
+                    Some(field.typ.clone()),
+                )?);
+            }
+
+            scope.props.borrow_mut().is_leaf = false;
+
             sst::Expression {
-                typ: field.typ.clone(),
-                kind: sst::ExprKind::MemberAccess(Box::new(sst_expr), field),
+                typ: sig.ret.clone(),
+                kind: sst::ExprKind::FuncCall(sig, exprs),
             }
         }
     };
@@ -805,7 +891,7 @@ fn analyze_expression_non_typechecked(
 }
 
 fn analyze_expression(
-    scope: Rc<Scope>,
+    scope: &Rc<Scope>,
     expr: &ast::Expression,
     inferred: Option<Rc<sst::Type>>,
 ) -> Result<sst::Expression> {
@@ -820,21 +906,21 @@ fn analyze_expression(
     Ok(sst_expr)
 }
 
-fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
+fn analyze_statement(scope: &Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Statement> {
     match stmt {
         ast::Statement::If(cond, body, else_body) => {
             let bool = scope.frame.borrow().ctx.types.bool.clone();
-            let sst_cond = Box::new(analyze_expression(scope.clone(), cond, Some(bool))?);
+            let sst_cond = Box::new(analyze_expression(scope, cond, Some(bool))?);
 
             let ar_before = scope.props.borrow().always_returns;
 
             scope.props.borrow_mut().always_returns = ar_before;
-            let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
+            let sst_body = Box::new(analyze_statement(scope, body)?);
             let ar_a = scope.props.borrow().always_returns;
 
             scope.props.borrow_mut().always_returns = ar_before;
             let sst_else_body = match else_body {
-                Some(else_body) => Box::new(analyze_statement(scope.clone(), else_body)?),
+                Some(else_body) => Box::new(analyze_statement(scope, else_body)?),
                 None => Box::new(sst::Statement::Empty),
             };
             let ar_b = scope.props.borrow().always_returns;
@@ -856,7 +942,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
         }
 
         ast::Statement::Loop(body) => {
-            let sst_body = Box::new(analyze_statement(scope.clone(), body)?);
+            let sst_body = Box::new(analyze_statement(scope, body)?);
             // If we don't know whether we always return after parsing the body,
             // we *will* always return (or never break),
             // because that means there's no break statement in the body.
@@ -875,7 +961,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
             let ret = scope.frame.borrow().ret.clone();
             let sst_expr = match expr {
                 Some(expr) => Some(Box::new(analyze_expression(
-                    scope.clone(),
+                    scope,
                     expr,
                     Some(ret.clone()),
                 )?)),
@@ -916,14 +1002,14 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
         }
 
         ast::Statement::VarDecl(ident, expr) => {
-            let sst_expr = Box::new(analyze_expression(scope.clone(), expr, None)?);
+            let sst_expr = Box::new(analyze_expression(scope, expr, None)?);
             let var = scope.declare(ident.clone(), sst_expr.typ.clone())?;
             Ok(sst::Statement::VarDecl(var, sst_expr))
         }
 
         ast::Statement::Block(stmts) => {
             let subscope = Scope::from_parent(scope.clone());
-            let sst_stmts = analyze_block(subscope.clone(), stmts)?;
+            let sst_stmts = analyze_block(&subscope, stmts)?;
 
             if !subscope.props.borrow().is_leaf {
                 scope.props.borrow_mut().is_leaf = false;
@@ -945,7 +1031,7 @@ fn analyze_statement(scope: Rc<Scope>, stmt: &ast::Statement) -> Result<sst::Sta
     }
 }
 
-fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statement>> {
+fn analyze_block(scope: &Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statement>> {
     let mut sst_stmts = Vec::<sst::Statement>::new();
     for stmt in block {
         // Eliminate obviously dead code
@@ -953,7 +1039,7 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
             return Ok(sst_stmts);
         }
 
-        let sst_stmt = analyze_statement(scope.clone(), stmt)?;
+        let sst_stmt = analyze_statement(scope, stmt)?;
         match sst_stmt {
             sst::Statement::Empty => (),
             _ => sst_stmts.push(sst_stmt),
@@ -970,13 +1056,7 @@ fn analyze_func_decl(ctx: &Rc<Context>, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     }
 
     // Analyze the signature first, so that recursive calls work
-    let sig = analyze_extern_func_decl(ctx, &fd.signature)?;
-
-    // Add the method if this is a method
-    if let Some(parent_spec) = &fd.signature.name.typ {
-        let parent_typ = get_type(ctx, parent_spec, None)?;
-        ctx.add_method(&parent_typ, sig.clone());
-    }
+    let _ = analyze_extern_func_decl(ctx, &fd.signature)?;
 
     let params = analyze_field_decls(ctx, &fd.signature.params, None)?;
     let return_type = get_type(ctx, &fd.signature.ret, None)?;
@@ -998,7 +1078,7 @@ fn analyze_func_decl(ctx: &Rc<Context>, fd: &ast::FuncDecl) -> Result<Rc<sst::Fu
     let return_addr = root_scope.declare(underscore, voidptr_type)?;
 
     let body_scope = Scope::from_parent(root_scope);
-    let stmts = analyze_block(body_scope.clone(), &fd.body)?;
+    let stmts = analyze_block(&body_scope, &fd.body)?;
 
     let returns_void = matches!(
         return_type.kind,

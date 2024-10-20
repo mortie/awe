@@ -87,7 +87,7 @@ pub struct StringConstant {
     pub index: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     Struct(Rc<Struct>, Vec<Expression>),
     Integer(i128),
@@ -108,12 +108,12 @@ pub enum BinOp {
     Leq,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Locator {
     MemberAccess(FieldDecl),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExprKind {
     Literal(Literal),
     FuncCall(Rc<FuncSignature>, Vec<Expression>),
@@ -123,10 +123,12 @@ pub enum ExprKind {
     Variable(Rc<LocalVar>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
     Reference(Box<Expression>),
+    Dereference(Box<Expression>),
+    DerefAccess(Box<Expression>, FieldDecl),
     MemberAccess(Box<Expression>, FieldDecl),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expression {
     pub typ: Rc<Type>,
     pub kind: ExprKind,

@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::rc::Rc;
 
-use super::common::{self, CodegenError, Frame, MaybeTemp, MaybeTempKind, Result};
+use super::common::{self, CodegenError, Frame, MaybeTemp, Result};
 use crate::analyzer::sst;
 
 /*
@@ -18,6 +18,26 @@ use crate::analyzer::sst;
 
 fn frame_offset(var: &sst::LocalVar) -> isize {
     -(var.frame_offset + var.typ.size as isize)
+}
+
+fn gen_load_from_reg(
+    frame: &mut Frame,
+    dest: u8,
+    src: u8,
+    offset: usize,
+    size: usize,
+) -> Result<()> {
+    let w = &mut frame.w;
+    match size {
+        0 => return Ok(()),
+        1 => writeln!(w, "\tldrb w{dest}, [x{src}, {offset}]"),
+        2 => writeln!(w, "\tldrh w{dest}, [x{src}, {offset}]"),
+        4 => writeln!(w, "\tldr w{dest}, [x{src}, {offset}]"),
+        8 => writeln!(w, "\tldr x{dest}, [x{src}, {offset}]"),
+        _ => panic!("Unsupported load size: {}", size),
+    }?;
+
+    Ok(())
 }
 
 fn gen_load(frame: &mut Frame, reg: u8, src: &sst::LocalVar) -> Result<()> {
@@ -294,18 +314,35 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
         sst::ExprKind::Reference(expr) => {
             writeln!(&mut frame.w, "\t// <Expression::Reference>")?;
             let var = gen_expr(frame, expr)?;
-            let MaybeTempKind::NonTemp(var) = var.kind else {
-                return Err(CodegenError::ReferenceToTemporary);
-            };
-
-            let o = frame_offset(&var);
+            let o = frame_offset(var.var());
             if o < 0 {
                 writeln!(&mut frame.w, "\tsub x0, sp, {}", -o)?;
             } else {
                 writeln!(&mut frame.w, "\tadd x0, sp, {}", o)?;
             }
             gen_store(frame, loc, 0)?;
+            frame.maybe_pop_temp(var);
             writeln!(&mut frame.w, "\t// </Expression::Reference>")?;
+        }
+
+        sst::ExprKind::Dereference(expr) => {
+            writeln!(&mut frame.w, "\t// <Expression::Dereference>")?;
+            let ptr_var = gen_expr(frame, expr)?;
+            gen_load(frame, 0, ptr_var.var())?;
+            gen_load_from_reg(frame, 0, 0, 0, loc.typ.size)?;
+            gen_store(frame, loc, 0)?;
+            frame.maybe_pop_temp(ptr_var);
+            writeln!(&mut frame.w, "\t// </Expression::Dereference>")?;
+        }
+
+        sst::ExprKind::DerefAccess(expr, field) => {
+            writeln!(&mut frame.w, "\t// <Expression::Dereference>")?;
+            let ptr_var = gen_expr(frame, expr)?;
+            gen_load(frame, 0, ptr_var.var())?;
+            gen_load_from_reg(frame, 0, 0, field.offset, loc.typ.size)?;
+            gen_store(frame, loc, 0)?;
+            frame.maybe_pop_temp(ptr_var);
+            writeln!(&mut frame.w, "\t// </Expression::Dereference>")?;
         }
 
         sst::ExprKind::MemberAccess(..) => {

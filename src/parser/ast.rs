@@ -83,7 +83,9 @@ pub enum Expression {
     Group(Box<Expression>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
     Reference(Box<Expression>),
+    Dereference(Box<Expression>),
     MemberAccess(Box<Expression>, Ident),
+    MethodCall(Box<Expression>, Ident, Vec<Expression>),
 }
 
 #[derive(Debug, Clone)]
