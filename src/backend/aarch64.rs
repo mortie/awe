@@ -227,8 +227,9 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
                 param_vars.push(var);
             }
 
+            let symbol_name = common::mangle_name(&signature.name);
             writeln!(&mut frame.w, "\tsub sp, sp, {}", aligned.frame_offset)?;
-            writeln!(&mut frame.w, "\tbl awe${}", signature.name)?;
+            writeln!(&mut frame.w, "\tbl awe${}", symbol_name)?;
             writeln!(&mut frame.w, "\tadd sp, sp, {}", aligned.frame_offset)?;
 
             while let Some(var) = param_vars.pop() {
@@ -388,7 +389,7 @@ fn gen_stmt(frame: &mut Frame, stmt: &sst::Statement) -> Result<()> {
     match stmt {
         sst::Statement::If(cond, body, else_body) => {
             writeln!(&mut frame.w, "\t// <Statement::If>")?;
-            let fname = frame.func.signature.name.as_str();
+            let fname = frame.symbol_name.clone();
             let else_label = frame.label();
             let end_label = frame.label();
             let condvar = gen_expr(frame, cond)?;
@@ -413,7 +414,7 @@ fn gen_stmt(frame: &mut Frame, stmt: &sst::Statement) -> Result<()> {
 
         sst::Statement::Loop(body) => {
             writeln!(&mut frame.w, "\t// <Statement::Loop>")?;
-            let fname = frame.func.signature.name.as_str();
+            let fname = frame.symbol_name.clone();
             let labels = frame.push_loop();
             writeln!(&mut frame.w, "awe${}$L{}:", fname, labels.continue_label)?;
             gen_stmt(frame, body)?;
@@ -439,7 +440,7 @@ fn gen_stmt(frame: &mut Frame, stmt: &sst::Statement) -> Result<()> {
                 return Err(CodegenError::InvalidBreak);
             };
 
-            let fname = frame.func.signature.name.as_str();
+            let fname = frame.symbol_name.clone();
             writeln!(&mut frame.w, "\tb awe${}$L{}", fname, labels.break_label)?;
             writeln!(&mut frame.w, "\t// </Statement::Break>")?;
         }
@@ -481,9 +482,9 @@ fn gen_stmt(frame: &mut Frame, stmt: &sst::Statement) -> Result<()> {
 
 fn gen_func(frame: &mut Frame) -> Result<()> {
     common::gen_signature_comment(&mut frame.w, &frame.func.signature)?;
-    writeln!(frame.w, ".global awe${}", frame.func.signature.name)?;
+    writeln!(frame.w, ".global awe${}", frame.symbol_name)?;
     writeln!(frame.w, ".balign 4")?;
-    writeln!(frame.w, "awe${}:", frame.func.signature.name)?;
+    writeln!(frame.w, "awe${}:", frame.symbol_name)?;
 
     // We expect to have been called using the 'bl' instruction,
     // which puts the return pointer in the link register.

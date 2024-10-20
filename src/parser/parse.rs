@@ -245,29 +245,11 @@ pub fn identifier(r: &mut Reader) -> Result<ast::Ident> {
     }
 }
 
-/// QualifiedIdent ::= Ident | Ident '::' QualifiedIdent
-pub fn qualified_ident(r: &mut Reader) -> Result<ast::QualifiedIdent> {
-    whitespace(r);
-    let ident = identifier(r)?;
-
-    let mut idents = ast::QualifiedIdent::new();
-    idents.push(ident);
-
-    loop {
-        whitespace(r);
-        if r.peek_cmp_consume(b"::") {
-            idents.push(require("identifier", identifier(r))?);
-        } else {
-            return Ok(idents);
-        }
-    }
-}
-
-/// TypeParams ::= QualifiedIdent | (QualifiedIdent ',' TypeParams)
-/// TypeSpec ::= QualifiedIdent ('[' TypeParams ']')?
+/// TypeParams ::= TypeSpec | (TypeSpec ',' TypeSpec)
+/// TypeSpec ::= Ident ('[' TypeParams ']')?
 pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
     whitespace(r);
-    let ident = qualified_ident(r)?;
+    let ident = identifier(r)?;
     let mut params = Vec::<ast::TypeParam>::new();
 
     whitespace(r);
@@ -286,6 +268,31 @@ pub fn type_spec(r: &mut Reader) -> Result<ast::TypeSpec> {
     }
 
     Ok(ast::TypeSpec { ident, params })
+}
+
+/// FuncName ::= (TypeSpec '::') Ident
+pub fn func_name(r: &mut Reader) -> Result<ast::FuncName> {
+    whitespace(r);
+    let point = r.tell();
+    let typ = match type_spec(r) {
+        Ok(typ) => {
+            whitespace(r);
+            if !r.peek_cmp_consume(b"::") {
+                r.seek(point);
+                None
+            } else {
+                whitespace(r);
+                Some(typ)
+            }
+        }
+        Err(_) => {
+            r.seek(point);
+            None
+        }
+    };
+
+    let ident = identifier(r)?;
+    Ok(ast::FuncName { typ, ident })
 }
 
 /// ExprList ::= (Expression ',')* (Expression ','?)?
@@ -547,9 +554,9 @@ pub fn literal_expr(r: &mut Reader) -> Result<ast::Expression> {
     Ok(ast::Expression::Literal(literal))
 }
 
-/// FuncCallExpr ::= QualifiedIdent '(' ExprList ')'
+/// FuncCallExpr ::= FuncName '(' ExprList ')'
 pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
-    let ident = qualified_ident(r)?;
+    let name = func_name(r)?;
 
     if !r.peek_cmp_consume(b"(") {
         return Err(ParseError::inapplicable(r));
@@ -561,7 +568,7 @@ pub fn func_call_expr(r: &mut Reader) -> Result<ast::Expression> {
         return Err(ParseError::unexpected_peek(r));
     }
 
-    Ok(ast::Expression::FuncCall(ident, exprs))
+    Ok(ast::Expression::FuncCall(name, exprs))
 }
 
 /// CastExpr ::= TypeSpec '(' Expression ')'
@@ -1102,7 +1109,7 @@ fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
         return Err(ParseError::inapplicable(r));
     }
 
-    let ident = require("name", qualified_ident(r))?;
+    let name = func_name(r)?;
 
     if !r.peek_cmp_consume(b"(") {
         return Err(ParseError::expected_char(r, b'('));
@@ -1114,8 +1121,8 @@ fn func_signature(r: &mut Reader) -> Result<ast::FuncSignature> {
         return Err(ParseError::expected_char(r, b')'));
     }
 
-    let ret = type_spec(r)?;
-    Ok(ast::FuncSignature { ident, params, ret })
+    let ret = require("return type", type_spec(r))?;
+    Ok(ast::FuncSignature { name, params, ret })
 }
 
 /// FuncDecl ::= FuncSignature Block

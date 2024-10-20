@@ -4,8 +4,6 @@ use std::rc::Rc;
 
 pub type Ident = Rc<String>;
 
-pub type QualifiedIdent = Vec<Ident>;
-
 #[derive(Debug, Clone)]
 pub enum TypeParam {
     Type(Box<TypeSpec>),
@@ -13,8 +11,14 @@ pub enum TypeParam {
 
 #[derive(Debug, Clone)]
 pub struct TypeSpec {
-    pub ident: QualifiedIdent,
+    pub ident: Ident,
     pub params: Vec<TypeParam>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FuncName {
+    pub typ: Option<TypeSpec>,
+    pub ident: Ident,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +75,7 @@ pub enum Locator {
 #[derive(Debug, Clone)]
 pub enum Expression {
     Literal(LiteralExpr),
-    FuncCall(QualifiedIdent, Vec<Expression>),
+    FuncCall(FuncName, Vec<Expression>),
     Cast(TypeSpec, Box<Expression>),
     Assignment(Ident, Vec<Locator>, Box<Expression>),
     Uninitialized(Option<TypeSpec>),
@@ -119,7 +123,7 @@ pub struct StructDecl {
 
 #[derive(Debug, Clone)]
 pub struct FuncSignature {
-    pub ident: QualifiedIdent,
+    pub name: FuncName,
     pub params: Vec<FieldDecl>,
     pub ret: TypeSpec,
 }

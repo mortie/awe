@@ -28,6 +28,7 @@ pub struct Context {
     struct_templates: RefCell<HashMap<Rc<String>, Rc<ast::StructDecl>>>,
     string_constant_map: RefCell<HashMap<Rc<String>, sst::StringConstant>>,
     string_constants: RefCell<Vec<(sst::StringConstant, Rc<String>)>>,
+    methods: RefCell<HashMap<Rc<String>, Rc<sst::FuncSignature>>>,
 }
 
 impl Context {
@@ -39,6 +40,7 @@ impl Context {
             struct_templates: RefCell::new(HashMap::new()),
             string_constant_map: RefCell::new(HashMap::new()),
             string_constants: RefCell::new(Vec::new()),
+            methods: RefCell::new(HashMap::new()),
         };
 
         ctx.add_type(ctx.types.void.clone());
@@ -107,5 +109,9 @@ impl Context {
         self.struct_templates
             .borrow_mut()
             .insert(name, Rc::new(tmpl));
+    }
+
+    pub fn add_method(&self, typ: &Rc<sst::Type>, sig: Rc<sst::FuncSignature>) {
+        self.methods.borrow_mut().insert(typ.name.clone(), sig);
     }
 }

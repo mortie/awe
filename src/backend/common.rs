@@ -66,6 +66,55 @@ pub fn gen_signature_comment<W: Write>(w: &mut W, sig: &sst::FuncSignature) -> R
     Ok(())
 }
 
+fn is_legal_name_char(ch: u8) -> bool {
+    (ch >= b'a' && ch <= b'z') ||
+        (ch >= b'A' && ch <= b'Z') ||
+        (ch >= b'0' && ch <= b'9') ||
+        ch == b'_'
+}
+
+fn name_is_legal(name: &str) -> bool {
+    if name.starts_with("_") {
+        return false;
+    }
+
+    for ch in name.bytes() {
+        if !is_legal_name_char(ch) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+pub fn mangle_name(name: &Rc<String>) -> Rc<String> {
+    if name_is_legal(&name) {
+        return name.clone();
+    }
+
+    let mut mangled = String::with_capacity(name.len() + 16);
+    mangled.push_str("_Z");
+    for ch in name.bytes() {
+        if ch == b'_' {
+            mangled.push_str("_Z");
+        } else if ch == b':' {
+            mangled.push_str("_X");
+        } else if ch == b',' {
+            mangled.push_str("_C");
+        } else if ch == b'[' {
+            mangled.push_str("_A");
+        } else if ch == b'[' {
+            mangled.push_str("_B");
+        } else if !is_legal_name_char(ch) {
+            panic!("Unexpected character in identifier: '{}'", ch as char);
+        } else {
+            mangled.push(ch as char);
+        }
+    }
+
+    Rc::new(mangled)
+}
+
 #[derive(Clone)]
 pub struct Loop {
     pub break_label: usize,
@@ -81,6 +130,7 @@ pub struct TempVar {
 pub struct Frame<'a, 'b> {
     pub w: &'a mut dyn Write,
     pub func: &'b sst::Function,
+    pub symbol_name: Rc<String>,
     stack_size: usize,
     temps: Vec<TempVar>,
     sentinel: Rc<sst::Type>,
@@ -91,9 +141,11 @@ pub struct Frame<'a, 'b> {
 impl<'a, 'b> Frame<'a, 'b> {
     pub fn new(w: &'a mut dyn Write, func: &'b sst::Function, sentinel: Rc<sst::Type>) -> Self {
         let stack_size = func.stack_size;
+        let symbol_name = mangle_name(&func.signature.name);
         Self {
             w,
             func,
+            symbol_name,
             stack_size,
             temps: Vec::new(),
             sentinel,

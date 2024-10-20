@@ -197,8 +197,8 @@ impl Scope {
         get_type(&self.frame.borrow_mut().ctx, spec, Some(self))
     }
 
-    fn get_func_sig(&self, ident: &ast::QualifiedIdent) -> Result<Rc<sst::FuncSignature>> {
-        let name = ident_to_name(ident);
+    fn get_func_sig(&self, name: &ast::FuncName) -> Result<Rc<sst::FuncSignature>> {
+        let name = func_to_name(name);
         let frame = self.frame.borrow();
         let Some(decl) = frame.ctx.get_decl(&name) else {
             return Err(AnalysisError::UndeclaredFunction(name));
@@ -224,25 +224,36 @@ impl StackFrame {
     }
 }
 
-fn ident_to_name(ident: &ast::QualifiedIdent) -> Rc<String> {
-    if ident.is_empty() {
-        eprintln!("Zero-length ident! Treating as '_'");
-        return Rc::new("_".to_owned());
-    }
+fn write_spec_to_name(spec: &ast::TypeSpec, out: &mut String) {
+    out.push_str(&spec.ident);
+    if !spec.params.is_empty() {
+        out.push('[');
+        let mut first = true;
+        for ast::TypeParam::Type(part) in &spec.params {
+            if !first {
+                out.push(',');
+            }
+            first = false;
 
-    if ident.len() == 1 {
-        return ident[0].clone();
-    }
-
-    let mut name = String::new();
-    for part in ident {
-        if !name.is_empty() {
-            name += "::";
+            write_spec_to_name(part, out);
         }
-        name += part;
+        out.push(']');
+    }
+}
+
+fn func_to_name(name: &ast::FuncName) -> Rc<String> {
+    if name.typ.is_none() {
+        return name.ident.clone();
     }
 
-    Rc::new(name)
+    let mut s = String::new();
+    if let Some(spec) = &name.typ {
+        write_spec_to_name(spec, &mut s);
+        s.push_str("::");
+    }
+
+    s.push_str(&name.ident);
+    Rc::new(s)
 }
 
 fn get_type(
@@ -250,7 +261,7 @@ fn get_type(
     spec: &ast::TypeSpec,
     scope: Option<&Scope>,
 ) -> Result<Rc<sst::Type>> {
-    let ident = ident_to_name(&spec.ident);
+    let ident = &spec.ident;
 
     if ident.as_str() == "ptr" {
         if spec.params.len() != 1 {
@@ -272,7 +283,7 @@ fn get_type(
         }
 
         eprintln!("during get_type {:?}: undeclared type {}", spec, ident);
-        return Err(AnalysisError::UndeclaredType(ident));
+        return Err(AnalysisError::UndeclaredType(ident.clone()));
     }
 
     if let Some(st) = ctx.get_struct_template(&ident) {
@@ -338,7 +349,7 @@ fn get_type(
         return Ok(typ);
     }
 
-    Err(AnalysisError::UndeclaredType(ident))
+    Err(AnalysisError::UndeclaredType(ident.clone()))
 }
 
 fn make_pointer_to(ctx: &Rc<Context>, typ: Rc<sst::Type>) -> Rc<sst::Type> {
@@ -578,10 +589,10 @@ fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
 
 fn analyze_func_call(
     scope: Rc<Scope>,
-    ident: &ast::QualifiedIdent,
+    name: &ast::FuncName,
     params: &[ast::Expression],
 ) -> Result<sst::Expression> {
-    let maybe_sig = scope.get_func_sig(ident);
+    let maybe_sig = scope.get_func_sig(name);
 
     // A function might be a cast,
     // since casts and function calls can't be properly distinguished by the parser
@@ -590,8 +601,12 @@ fn analyze_func_call(
             return Err(err);
         }
 
+        if name.typ.is_some() {
+            return Err(err);
+        }
+
         let spec = ast::TypeSpec {
-            ident: ident.clone(),
+            ident: name.ident.clone(),
             params: Vec::new(),
         };
 
@@ -949,13 +964,19 @@ fn analyze_block(scope: Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::Statem
 }
 
 fn analyze_func_decl(ctx: &Rc<Context>, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
-    let name = ident_to_name(&fd.signature.ident);
+    let name = func_to_name(&fd.signature.name);
     if ctx.has_decl(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
     }
 
     // Analyze the signature first, so that recursive calls work
-    analyze_extern_func_decl(ctx, &fd.signature)?;
+    let sig = analyze_extern_func_decl(ctx, &fd.signature)?;
+
+    // Add the method if this is a method
+    if let Some(parent_spec) = &fd.signature.name.typ {
+        let parent_typ = get_type(ctx, parent_spec, None)?;
+        ctx.add_method(&parent_typ, sig.clone());
+    }
 
     let params = analyze_field_decls(ctx, &fd.signature.params, None)?;
     let return_type = get_type(ctx, &fd.signature.ret, None)?;
@@ -1012,7 +1033,7 @@ fn analyze_extern_func_decl(
     ctx: &Rc<Context>,
     efd: &ast::FuncSignature,
 ) -> Result<Rc<sst::FuncSignature>> {
-    let name = ident_to_name(&efd.ident);
+    let name = func_to_name(&efd.name);
     if ctx.has_decl(&name) {
         return Err(AnalysisError::MultipleDefinitions(name));
     }
@@ -1081,7 +1102,7 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
             ast::Declaration::Func(fd) => match analyze_func_decl(ctx, fd) {
                 Ok(decl) => functions.push(decl),
                 Err(err) => {
-                    let name = ident_to_name(&fd.signature.ident);
+                    let name = func_to_name(&fd.signature.name);
                     let err = Box::new(err);
                     return Err(AnalysisError::FunctionCtx(name, err));
                 }
