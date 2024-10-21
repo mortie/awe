@@ -20,6 +20,15 @@ fn frame_offset(var: &sst::LocalVar) -> isize {
     -(var.frame_offset + var.typ.size as isize)
 }
 
+fn struct_field_offset(var: &sst::LocalVar, field: &sst::FieldDecl) -> sst::LocalVar {
+    let base = var.frame_offset + var.typ.size as isize;
+    sst::LocalVar {
+        typ: field.typ.clone(),
+        frame_offset: base - field.offset as isize - field.typ.size as isize,
+    }
+
+}
+
 fn gen_load_from_reg(
     frame: &mut Frame,
     dest: u8,
@@ -85,14 +94,7 @@ fn gen_struct(
     exprs: &[sst::Expression],
 ) -> Result<()> {
     for (i, field) in s.fields.iter().enumerate() {
-        let expr = &exprs[i];
-
-        let var = sst::LocalVar {
-            typ: field.typ.clone(),
-            frame_offset: dest.frame_offset + field.offset as isize,
-        };
-
-        gen_expr_to(frame, expr, &var)?;
+        gen_expr_to(frame, &exprs[i], &struct_field_offset(dest, field))?;
     }
 
     Ok(())
@@ -371,10 +373,7 @@ fn gen_expr(frame: &mut Frame, expr: &sst::Expression) -> Result<MaybeTemp> {
                 field.offset
             )?;
             let container = gen_expr(frame, expr)?;
-            let var = sst::LocalVar {
-                typ: field.typ.clone(),
-                frame_offset: container.var().frame_offset + field.offset as isize,
-            };
+            let var = struct_field_offset(container.var(), field);
             let var = MaybeTemp::non_temp(var).with_container(container);
             writeln!(&mut frame.w, "\t// </Expression::MemberAccess>")?;
             Ok(var)
