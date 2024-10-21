@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct LocalVar {
@@ -49,7 +49,6 @@ pub struct FieldDecls {
 pub struct Struct {
     pub name: Rc<String>,
     pub fields: Vec<FieldDecl>,
-    pub methods: HashMap<Rc<String>, Rc<Function>>,
 }
 
 impl Struct {
@@ -85,6 +84,7 @@ pub struct Function {
 #[derive(Debug, Clone, Copy)]
 pub struct StringConstant {
     pub index: u32,
+    pub length: usize,
 }
 
 #[derive(Debug, Clone)]

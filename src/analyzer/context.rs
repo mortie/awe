@@ -77,6 +77,7 @@ impl Context {
         let mut strings = self.string_constants.borrow_mut();
         let sc = sst::StringConstant {
             index: strings.len() as u32,
+            length: str.len(),
         };
         string_map.insert(str.clone(), sc);
         strings.push((sc, str.clone()));

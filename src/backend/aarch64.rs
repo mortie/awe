@@ -252,8 +252,11 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
                     "\t// <Expression::Literal string {}>",
                     sc.index
                 )?;
+                let offset = frame_offset(loc);
                 writeln!(&mut frame.w, "\tadr x0, awestr${}", sc.index)?;
-                writeln!(&mut frame.w, "\tstr x0, [sp, {}]", frame_offset(loc))?;
+                writeln!(&mut frame.w, "\tstr x0, [sp, {}]", offset)?;
+                writeln!(&mut frame.w, "\tmov x0, {}", sc.length)?;
+                writeln!(&mut frame.w, "\tstr x0, [sp, {}]", offset + 8)?;
                 writeln!(&mut frame.w, "\t// </Expression::Literal>")?;
             }
 

@@ -350,7 +350,6 @@ fn get_type(
             kind: sst::TypeKind::Struct(Rc::new(sst::Struct {
                 name: tname.clone(),
                 fields,
-                methods: HashMap::new(),
             })),
         });
         ctx.add_decl(tname, sst::Declaration::Type(typ.clone()));
@@ -374,6 +373,39 @@ fn make_pointer_to(ctx: &Rc<Context>, typ: &Rc<sst::Type>) -> Rc<sst::Type> {
     });
     ctx.add_decl(name, sst::Declaration::Type(ptr.clone()));
     ptr
+}
+
+fn make_span_of(ctx: &Rc<Context>, typ: &Rc<sst::Type>) -> Rc<sst::Type> {
+    let name = Rc::new(format!("span[{}]", typ.name));
+    if let Some(sst::Declaration::Type(typ)) = ctx.get_decl(&name) {
+        return typ.clone();
+    }
+
+    let ptr_type = make_pointer_to(ctx, typ);
+
+    let typ = Rc::new(sst::Type {
+        name: name.clone(),
+        size: 16,
+        align: 8,
+        kind: sst::TypeKind::Struct(Rc::new(sst::Struct {
+            name: name.clone(),
+            fields: vec![
+                sst::FieldDecl {
+                    name: Rc::new("ptr".into()),
+                    typ: ptr_type,
+                    offset: 0,
+                },
+                sst::FieldDecl {
+                    name: Rc::new("len".into()),
+                    typ: ctx.types.ulong.clone(),
+                    offset: 8,
+                },
+            ],
+        })),
+    });
+
+    ctx.add_decl(name, sst::Declaration::Type(typ.clone()));
+    typ
 }
 
 fn analyze_field_decls(
@@ -445,7 +477,6 @@ fn analyze_struct_decl(ctx: &Rc<Context>, sd: &ast::StructDecl) -> Result<()> {
         kind: sst::TypeKind::Struct(Rc::new(sst::Struct {
             name: name.clone(),
             fields,
-            methods: HashMap::new(),
         })),
     });
 
@@ -558,7 +589,7 @@ fn analyze_literal(
             let frame = scope.frame.borrow_mut();
             let sc = frame.ctx.add_string(&str);
             Ok(sst::Expression {
-                typ: frame.ctx.types.byteptr.clone(),
+                typ: make_span_of(&frame.ctx, &frame.ctx.types.byte),
                 kind: sst::ExprKind::Literal(sst::Literal::String(sc)),
             })
         }
@@ -1186,6 +1217,36 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
     };
 
     let ctx = Rc::new(Context::new(types));
+
+    // Create a span struct
+    let span_decl = ast::StructDecl {
+        name: Rc::new("span".into()),
+        fields: vec![
+            ast::FieldDecl {
+                name: Rc::new("ptr".into()),
+                typ: ast::TypeSpec {
+                    ident: Rc::new("ptr".into()),
+                    params: vec![
+                        ast::TypeParam::Type(Box::new(ast::TypeSpec {
+                            ident: Rc::new("T".into()),
+                            params: vec![],
+                        })),
+                    ],
+                },
+            },
+            ast::FieldDecl {
+                name: Rc::new("len".into()),
+                typ: ast::TypeSpec {
+                    ident: Rc::new("ulong".into()),
+                    params: vec![],
+                },
+            },
+        ],
+        type_params: vec![
+            Rc::new("T".into()),
+        ],
+    };
+    ctx.add_struct_template(span_decl.name.clone(), span_decl);
 
     // Analyze all declarations, but no function bodies.
     // We do this first so that function bodies can refer to all other functions
