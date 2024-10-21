@@ -1060,12 +1060,6 @@ fn analyze_block(scope: &Rc<Scope>, block: &ast::Block) -> Result<Vec<sst::State
 
 fn analyze_func_decl(ctx: &Rc<Context>, fd: &ast::FuncDecl) -> Result<Rc<sst::Function>> {
     let name = func_to_name(&fd.signature.name);
-    if ctx.has_decl(&name) {
-        return Err(AnalysisError::MultipleDefinitions(name));
-    }
-
-    // Analyze the signature first, so that recursive calls work
-    let _ = analyze_extern_func_decl(ctx, &fd.signature)?;
 
     let params = analyze_field_decls(ctx, &fd.signature.params, None)?;
     let return_type = get_type(ctx, &fd.signature.ret, None)?;
@@ -1178,17 +1172,33 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
         }),
     };
 
-    let mut ctx = Rc::new(Context::new(types));
+    let ctx = Rc::new(Context::new(types));
 
-    let mut functions = Vec::<Rc<sst::Function>>::new();
+    // Analyze all declarations, but no function bodies.
+    // We do this first so that function bodies can refer to all other functions
+    // and all types etc.
     for decl in prog {
-        let ctx = &mut ctx;
         match decl {
             ast::Declaration::Struct(sd) => {
-                analyze_struct_decl(ctx, sd)?;
+                analyze_struct_decl(&ctx, sd)?;
             }
 
-            ast::Declaration::Func(fd) => match analyze_func_decl(ctx, fd) {
+            ast::Declaration::Func(fd) => {
+                // Analyze only the signature first
+                analyze_extern_func_decl(&ctx, &fd.signature)?;
+            }
+
+            ast::Declaration::ExternFunc(efd) => {
+                analyze_extern_func_decl(&ctx, efd)?;
+            }
+        }
+    }
+
+    // Analyze function bodies.
+    let mut functions = Vec::<Rc<sst::Function>>::new();
+    for decl in prog {
+        match decl {
+            ast::Declaration::Func(fd) => match analyze_func_decl(&ctx, fd) {
                 Ok(decl) => functions.push(decl),
                 Err(err) => {
                     let name = func_to_name(&fd.signature.name);
@@ -1196,10 +1206,7 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
                     return Err(AnalysisError::FunctionCtx(name, err));
                 }
             },
-
-            ast::Declaration::ExternFunc(efd) => {
-                analyze_extern_func_decl(ctx, efd)?;
-            }
+            _ => (),
         }
     }
 
