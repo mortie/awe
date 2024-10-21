@@ -191,8 +191,44 @@ fn gen_copy(frame: &mut Frame, dest: &sst::LocalVar, src: &sst::LocalVar) -> Res
         return Ok(());
     }
 
-    gen_load(frame, 0, src)?;
-    gen_store(frame, dest, 0)
+    let mut soffset = frame_offset(src);
+    let mut doffset = frame_offset(dest);
+    let mut size = dest.typ.size;
+    let w = &mut frame.w;
+
+    while size >= 8 {
+        writeln!(w, "\tldr x0, [sp, {soffset}]")?;
+        writeln!(w, "\tstr x0, [sp, {doffset}]")?;
+        soffset += 8;
+        doffset += 8;
+        size -= 8;
+    }
+
+    while size >= 4 {
+        writeln!(w, "\tldr w0, [sp, {soffset}]")?;
+        writeln!(w, "\tstr w0, [sp, {doffset}]")?;
+        soffset += 4;
+        doffset += 4;
+        size -= 4;
+    }
+
+    while size >= 2 {
+        writeln!(w, "\tldrh w0, [sp, {soffset}]")?;
+        writeln!(w, "\tstrh w0, [sp, {doffset}]")?;
+        soffset += 2;
+        doffset += 2;
+        size -= 2;
+    }
+
+    while size >= 1 {
+        writeln!(w, "\tldrb w0, [sp, {soffset}]")?;
+        writeln!(w, "\tstrb w0, [sp, {doffset}]")?;
+        soffset += 1;
+        doffset += 1;
+        size -= 1;
+    }
+
+    Ok(())
 }
 
 fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -> Result<()> {
