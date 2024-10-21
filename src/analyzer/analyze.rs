@@ -828,11 +828,20 @@ fn analyze_expression_non_typechecked(
             };
 
             // If the subject is already a dereference,
-            // generate a DerefAccess instead of a Dereference + MemberAccess
+            // generate a DerefAccess instead of a Dereference + MemberAccess.
+            // If it's a DerefAccess, apply the appropriate offset.
             match &sst_expr.kind {
                 sst::ExprKind::Dereference(subexpr) => sst::Expression {
                     typ: field.typ.clone(),
                     kind: sst::ExprKind::DerefAccess(subexpr.clone(), field),
+                },
+                sst::ExprKind::DerefAccess(expr, basefield) => sst::Expression {
+                    typ: field.typ.clone(),
+                    kind: sst::ExprKind::DerefAccess(expr.clone(), sst::FieldDecl {
+                        name: Rc::new(format!("{}.{}", basefield.name, field.name)),
+                        typ: field.typ.clone(),
+                        offset: basefield.offset + field.offset,
+                    }),
                 },
                 _ => sst::Expression {
                     typ: field.typ.clone(),
