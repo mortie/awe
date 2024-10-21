@@ -316,6 +316,10 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
         sst::ExprKind::Reference(expr) => {
             writeln!(&mut frame.w, "\t// <Expression::Reference>")?;
             let var = gen_expr(frame, expr)?;
+            if var.is_temp() {
+                return Err(CodegenError::ReferenceToTemporary);
+            }
+
             let o = frame_offset(var.var());
             if o < 0 {
                 writeln!(&mut frame.w, "\tsub x0, sp, {}", -o)?;

@@ -10,6 +10,7 @@ pub enum CodegenError {
     IOError(io::Error),
     SizeMismatch(usize, usize),
     InvalidBreak,
+    ReferenceToTemporary,
 
     // Unimplemented is for code that's a work in progress.
     // Most of the time, nothing which uses Unimplemented will be committed,
@@ -35,6 +36,7 @@ impl Display for CodegenError {
                 write!(f, "Size mismatch: Expected {expected}, got {got}")
             }
             InvalidBreak => write!(f, "Break outside of loop"),
+            ReferenceToTemporary => write!(f, "Reference to temporary"),
 
             // Unimplemented is for code that's a work in progress.
             // Most of the time, nothing which uses Unimplemented will be committed,
@@ -301,6 +303,13 @@ impl MaybeTemp {
         match &self.kind {
             MaybeTempKind::Temp(var) => var,
             MaybeTempKind::NonTemp(var) => var,
+        }
+    }
+
+    pub fn is_temp(&self) -> bool {
+        match self.kind {
+            MaybeTempKind::Temp(..) => true,
+            _ => false,
         }
     }
 }
