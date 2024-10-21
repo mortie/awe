@@ -68,7 +68,7 @@ fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> R
 
     writeln!(w, "// <PRELUDE>")?;
     write!(w, "{}", backend.prelude)?;
-    writeln!(w, "// <PRELUDE>")?;
+    writeln!(w, "// </PRELUDE>")?;
     writeln!(w)?;
 
     (backend.codegen)(&mut w, prog)?;
