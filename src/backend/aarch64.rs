@@ -26,7 +26,6 @@ fn struct_field_offset(var: &sst::LocalVar, field: &sst::FieldDecl) -> sst::Loca
         typ: field.typ.clone(),
         frame_offset: base - field.offset as isize - field.typ.size as isize,
     }
-
 }
 
 fn gen_load_from_reg(

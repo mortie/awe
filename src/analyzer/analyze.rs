@@ -199,10 +199,7 @@ impl Scope {
         get_type(&self.frame.borrow_mut().ctx, spec, Some(self))
     }
 
-    fn get_func_sig_from_name(
-        &self,
-        name: &Rc<String>,
-    ) -> Result<Rc<sst::FuncSignature>> {
+    fn get_func_sig_from_name(&self, name: &Rc<String>) -> Result<Rc<sst::FuncSignature>> {
         let frame = self.frame.borrow();
         let Some(decl) = frame.ctx.get_decl(&name) else {
             return Err(AnalysisError::UndeclaredFunction(name.clone()));
@@ -628,11 +625,11 @@ fn check_cast(from: &Rc<sst::Type>, to: &Rc<sst::Type>) -> Result<()> {
     }
 
     if is_pointer(&from.kind) && is_ulong(&to) {
-        return Ok(())
+        return Ok(());
     }
 
     if is_ulong(&from) && is_pointer(&to.kind) {
-        return Ok(())
+        return Ok(());
     }
 
     Err(AnalysisError::BadCast(from.clone(), to.clone()))
@@ -708,9 +705,7 @@ fn analyze_expression_non_typechecked(
     inferred: Option<Rc<sst::Type>>,
 ) -> Result<sst::Expression> {
     let expr = match expr {
-        ast::Expression::Literal(literal) => {
-            analyze_literal(scope, literal, inferred.clone())?
-        }
+        ast::Expression::Literal(literal) => analyze_literal(scope, literal, inferred.clone())?,
 
         ast::Expression::FuncCall(ident, params) => analyze_func_call(scope, ident, params)?,
 
@@ -811,11 +806,7 @@ fn analyze_expression_non_typechecked(
                 subexpr_type,
             )?);
 
-            let mut sst_rhs = Box::new(analyze_expression(
-                scope,
-                rhs,
-                Some(sst_lhs.typ.clone()),
-            )?);
+            let mut sst_rhs = Box::new(analyze_expression(scope, rhs, Some(sst_lhs.typ.clone()))?);
 
             if flip {
                 std::mem::swap(&mut sst_lhs, &mut sst_rhs);
@@ -869,21 +860,27 @@ fn analyze_expression_non_typechecked(
                 // If it's a DerefAccess, apply the appropriate offset.
                 sst::ExprKind::DerefAccess(expr, base) => sst::Expression {
                     typ: field.typ.clone(),
-                    kind: sst::ExprKind::DerefAccess(expr.clone(), sst::FieldDecl {
-                        name: Rc::new(format!("{}.{}", base.name, field.name)),
-                        typ: field.typ.clone(),
-                        offset: base.offset + field.offset,
-                    }),
+                    kind: sst::ExprKind::DerefAccess(
+                        expr.clone(),
+                        sst::FieldDecl {
+                            name: Rc::new(format!("{}.{}", base.name, field.name)),
+                            typ: field.typ.clone(),
+                            offset: base.offset + field.offset,
+                        },
+                    ),
                 },
 
                 // If it's a MemberAccess, apply the appropriate offset.
                 sst::ExprKind::MemberAccess(expr, base) => sst::Expression {
                     typ: field.typ.clone(),
-                    kind: sst::ExprKind::MemberAccess(expr.clone(), sst::FieldDecl {
-                        name: Rc::new(format!("{}.{}", base.name, field.name)),
-                        typ: field.typ.clone(),
-                        offset: base.offset + field.offset,
-                    }),
+                    kind: sst::ExprKind::MemberAccess(
+                        expr.clone(),
+                        sst::FieldDecl {
+                            name: Rc::new(format!("{}.{}", base.name, field.name)),
+                            typ: field.typ.clone(),
+                            offset: base.offset + field.offset,
+                        },
+                    ),
                 },
 
                 // Otherwise, keep it as it is.
@@ -918,7 +915,9 @@ fn analyze_expression_non_typechecked(
             let expected_subject_typ = sig.params.fields.first().unwrap().typ.clone();
             if !Rc::ptr_eq(&expected_subject_typ, &subject_ptr.typ) {
                 return Err(AnalysisError::TypeConflict(
-                    expected_subject_typ, subject_ptr.typ.clone()));
+                    expected_subject_typ,
+                    subject_ptr.typ.clone(),
+                ));
             }
 
             let mut exprs = Vec::<sst::Expression>::with_capacity(params.len() + 1);
@@ -1226,12 +1225,10 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
                 name: Rc::new("ptr".into()),
                 typ: ast::TypeSpec {
                     ident: Rc::new("ptr".into()),
-                    params: vec![
-                        ast::TypeParam::Type(Box::new(ast::TypeSpec {
-                            ident: Rc::new("T".into()),
-                            params: vec![],
-                        })),
-                    ],
+                    params: vec![ast::TypeParam::Type(Box::new(ast::TypeSpec {
+                        ident: Rc::new("T".into()),
+                        params: vec![],
+                    }))],
                 },
             },
             ast::FieldDecl {
@@ -1242,9 +1239,7 @@ pub fn program(prog: &ast::Program) -> Result<sst::Program> {
                 },
             },
         ],
-        type_params: vec![
-            Rc::new("T".into()),
-        ],
+        type_params: vec![Rc::new("T".into())],
     };
     ctx.add_struct_template(span_decl.name.clone(), span_decl);
 

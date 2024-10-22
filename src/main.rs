@@ -184,7 +184,7 @@ fn run() -> Result<()> {
 
     let prog = analyzer::analyze::program(&prog)?;
     if analyze_only {
-        println!("SST: {:#?}", prog);
+        analyzer::display::program(&mut io::stdout(), &prog)?;
         return Ok(());
     }
 

@@ -67,10 +67,10 @@ pub fn gen_signature_comment<W: Write>(w: &mut W, sig: &sst::FuncSignature) -> R
 }
 
 fn is_legal_name_char(ch: u8) -> bool {
-    (ch >= b'a' && ch <= b'z') ||
-        (ch >= b'A' && ch <= b'Z') ||
-        (ch >= b'0' && ch <= b'9') ||
-        ch == b'_'
+    (ch >= b'a' && ch <= b'z')
+        || (ch >= b'A' && ch <= b'Z')
+        || (ch >= b'0' && ch <= b'9')
+        || ch == b'_'
 }
 
 fn name_is_legal(name: &str) -> bool {
