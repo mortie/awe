@@ -40,6 +40,39 @@ fn write_literal(w: &mut dyn Write, lit: &sst::Literal, depth: u32) -> Result {
     Ok(())
 }
 
+fn write_lvalue(w: &mut dyn Write, lvalue: &sst::LValue, depth: u32) -> Result {
+    match lvalue {
+        sst::LValue::Variable(var) => {
+            write!(w, "var @ {}", var.frame_offset)?;
+        }
+        sst::LValue::Dereference(expr) => {
+            write!(w, "deref(")?;
+            write_expr(w, expr, depth)?;
+            write!(w, ")")?;
+        }
+        sst::LValue::DerefAccess(expr, field) => {
+            write!(w, "deref_member({}, {} into ", field.name, field.offset)?;
+            write_expr(w, expr, depth)?;
+            write!(w, ")")?;
+        }
+        sst::LValue::MemberAccess(expr, field) => {
+            write!(w, "member({}, {} into ", field.name, field.offset)?;
+            write_expr(w, expr, depth)?;
+            write!(w, ")")?;
+        }
+    }
+    Ok(())
+}
+
+fn write_lvalue_expr(
+    w: &mut dyn Write,
+    expr: &sst::Expression<sst::LValue>,
+    depth: u32,
+) -> Result {
+    write!(w, "[{}] ", expr.typ.name)?;
+    write_lvalue(w, &expr.kind, depth)
+}
+
 fn write_expr(w: &mut dyn Write, expr: &sst::Expression, depth: u32) -> Result {
     write!(w, "[{}] ", expr.typ.name)?;
     match &expr.kind {
@@ -70,15 +103,14 @@ fn write_expr(w: &mut dyn Write, expr: &sst::Expression, depth: u32) -> Result {
             write_expr(w, expr, depth)?;
             write!(w, ")")?;
         }
-        sst::ExprKind::Assignment(var, loc, expr) => {
-            write!(w, "assign var {} : {:?} = ", var.frame_offset, loc)?;
-            write_expr(w, expr, depth)?;
+        sst::ExprKind::Assignment(dest_expr, src_expr) => {
+            write!(w, "assign ")?;
+            write_lvalue_expr(w, dest_expr, depth)?;
+            write!(w, " = ")?;
+            write_expr(w, src_expr, depth)?;
         }
         sst::ExprKind::Uninitialized => {
             write!(w, "uninitialized")?;
-        }
-        sst::ExprKind::Variable(var) => {
-            write!(w, "var @ {}", var.frame_offset)?;
         }
         sst::ExprKind::BinOp(a, op, b) => {
             write!(w, "(")?;
@@ -92,21 +124,7 @@ fn write_expr(w: &mut dyn Write, expr: &sst::Expression, depth: u32) -> Result {
             write_expr(w, expr, depth)?;
             write!(w, ")")?;
         }
-        sst::ExprKind::Dereference(expr) => {
-            write!(w, "deref(")?;
-            write_expr(w, expr, depth)?;
-            write!(w, ")")?;
-        }
-        sst::ExprKind::DerefAccess(expr, field) => {
-            write!(w, "deref_member({}, {} into ", field.name, field.offset)?;
-            write_expr(w, expr, depth)?;
-            write!(w, ")")?;
-        }
-        sst::ExprKind::MemberAccess(expr, field) => {
-            write!(w, "member({}, {} into ", field.name, field.offset)?;
-            write_expr(w, expr, depth)?;
-            write!(w, ")")?;
-        }
+        sst::ExprKind::LValue(lvalue) => write_lvalue(w, lvalue, depth)?,
     }
 
     Ok(())

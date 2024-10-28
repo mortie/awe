@@ -77,7 +77,7 @@ pub enum Expression {
     Literal(LiteralExpr),
     FuncCall(FuncName, Vec<Expression>),
     Cast(TypeSpec, Box<Expression>),
-    Assignment(Ident, Vec<Locator>, Box<Expression>),
+    Assignment(Box<Expression>, Box<Expression>),
     Uninitialized(Option<TypeSpec>),
     Variable(Ident),
     Group(Box<Expression>),

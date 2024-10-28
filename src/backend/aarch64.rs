@@ -331,16 +331,6 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
             writeln!(&mut frame.w, "\t// <Expression::Uninitialized />")?;
         }
 
-        sst::ExprKind::Variable(var) => {
-            writeln!(
-                &mut frame.w,
-                "\t// <Expression::Variable loc:{}>",
-                var.frame_offset
-            )?;
-            gen_copy(frame, loc, var)?;
-            writeln!(&mut frame.w, "\t// </Expression::Variable>")?;
-        }
-
         sst::ExprKind::BinOp(lhs, op, rhs) => {
             writeln!(&mut frame.w, "\t// <Expression::BinOp {:?}>", op)?;
             let lhs_var = gen_expr(frame, lhs)?;
@@ -369,32 +359,44 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
             writeln!(&mut frame.w, "\t// </Expression::Reference>")?;
         }
 
-        sst::ExprKind::Dereference(expr) => {
-            writeln!(&mut frame.w, "\t// <Expression::Dereference>")?;
-            let ptr_var = gen_expr(frame, expr)?;
-            gen_load(frame, 0, ptr_var.var())?;
-            gen_load_from_reg(frame, 0, 0, 0, loc.typ.size)?;
-            gen_store(frame, loc, 0)?;
-            frame.maybe_pop_temp(ptr_var);
-            writeln!(&mut frame.w, "\t// </Expression::Dereference>")?;
-        }
+        sst::ExprKind::LValue(lvalue) => match lvalue {
+            sst::LValue::Variable(var) => {
+                writeln!(
+                    &mut frame.w,
+                    "\t// <Expression::Variable loc:{}>",
+                    var.frame_offset
+                )?;
+                gen_copy(frame, loc, var)?;
+                writeln!(&mut frame.w, "\t// </Expression::Variable>")?;
+            }
 
-        sst::ExprKind::DerefAccess(expr, field) => {
-            writeln!(&mut frame.w, "\t// <Expression::Dereference>")?;
-            let ptr_var = gen_expr(frame, expr)?;
-            gen_load(frame, 0, ptr_var.var())?;
-            gen_load_from_reg(frame, 0, 0, field.offset, loc.typ.size)?;
-            gen_store(frame, loc, 0)?;
-            frame.maybe_pop_temp(ptr_var);
-            writeln!(&mut frame.w, "\t// </Expression::Dereference>")?;
-        }
+            sst::LValue::Dereference(expr) => {
+                writeln!(&mut frame.w, "\t// <Expression::Dereference>")?;
+                let ptr_var = gen_expr(frame, expr)?;
+                gen_load(frame, 0, ptr_var.var())?;
+                gen_load_from_reg(frame, 0, 0, 0, loc.typ.size)?;
+                gen_store(frame, loc, 0)?;
+                frame.maybe_pop_temp(ptr_var);
+                writeln!(&mut frame.w, "\t// </Expression::Dereference>")?;
+            }
 
-        sst::ExprKind::MemberAccess(..) => {
-            writeln!(&mut frame.w, "\t// <Expression::MemberAccess::to>")?;
-            let var = gen_expr(frame, expr)?;
-            gen_copy(frame, loc, var.var())?;
-            frame.maybe_pop_temp(var);
-            writeln!(&mut frame.w, "\t// </Expression::MemberAccess::to>")?;
+            sst::LValue::DerefAccess(expr, field) => {
+                writeln!(&mut frame.w, "\t// <Expression::Dereference>")?;
+                let ptr_var = gen_expr(frame, expr)?;
+                gen_load(frame, 0, ptr_var.var())?;
+                gen_load_from_reg(frame, 0, 0, field.offset, loc.typ.size)?;
+                gen_store(frame, loc, 0)?;
+                frame.maybe_pop_temp(ptr_var);
+                writeln!(&mut frame.w, "\t// </Expression::Dereference>")?;
+            }
+
+            sst::LValue::MemberAccess(..) => {
+                writeln!(&mut frame.w, "\t// <Expression::MemberAccess::to>")?;
+                let var = gen_expr(frame, expr)?;
+                gen_copy(frame, loc, var.var())?;
+                frame.maybe_pop_temp(var);
+                writeln!(&mut frame.w, "\t// </Expression::MemberAccess::to>")?;
+            }
         }
     }
 
@@ -403,12 +405,12 @@ fn gen_expr_to(frame: &mut Frame, expr: &sst::Expression, loc: &sst::LocalVar) -
 
 fn gen_expr(frame: &mut Frame, expr: &sst::Expression) -> Result<MaybeTemp> {
     match &expr.kind {
-        sst::ExprKind::Variable(var) => {
+        sst::ExprKind::LValue(sst::LValue::Variable(var)) => {
             writeln!(&mut frame.w, "\t// <Expression::Variable />")?;
             Ok(MaybeTemp::non_temp(var.as_ref().clone()))
         }
 
-        sst::ExprKind::MemberAccess(expr, field) => {
+        sst::ExprKind::LValue(sst::LValue::MemberAccess(expr, field)) => {
             writeln!(
                 &mut frame.w,
                 "\t// <Expression::MemberAccess {}>",
@@ -421,25 +423,21 @@ fn gen_expr(frame: &mut Frame, expr: &sst::Expression) -> Result<MaybeTemp> {
             Ok(var)
         }
 
-        sst::ExprKind::Assignment(var, locators, expr) => {
+        sst::ExprKind::Assignment(dest_expr, src_expr) => {
             writeln!(&mut frame.w, "\t// <Expression::Assignment>")?;
 
-            let mut mvar = MaybeTemp::non_temp(var.as_ref().clone());
-            for locator in locators {
-                match locator {
-                    sst::Locator::MemberAccess(field) => {
-                        let var = sst::LocalVar {
-                            typ: field.typ.clone(),
-                            frame_offset: mvar.var().frame_offset + field.offset as isize,
-                        };
-                        mvar = MaybeTemp::non_temp(var).with_container(mvar);
-                    }
+            let var = match &dest_expr.kind {
+                sst::LValue::Variable(var) => {
+                    gen_expr_to(frame, src_expr, &var)?;
+                    MaybeTemp::non_temp(var.as_ref().clone())
                 }
-            }
+                _ => {
+                    return Err(CodegenError::Unimplemented);
+                }
+            };
 
-            gen_expr_to(frame, expr, mvar.var())?;
             writeln!(&mut frame.w, "\t// </Expression::Assignment>")?;
-            Ok(mvar)
+            Ok(var)
         }
 
         _ => {

@@ -109,8 +109,11 @@ pub enum BinOp {
 }
 
 #[derive(Debug, Clone)]
-pub enum Locator {
-    MemberAccess(FieldDecl),
+pub enum LValue {
+    Variable(Rc<LocalVar>),
+    Dereference(Box<Expression>),
+    DerefAccess(Box<Expression>, FieldDecl),
+    MemberAccess(Box<Expression>, FieldDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -118,20 +121,17 @@ pub enum ExprKind {
     Literal(Literal),
     FuncCall(Rc<FuncSignature>, Vec<Expression>),
     Cast(Box<Expression>),
-    Assignment(Rc<LocalVar>, Vec<Locator>, Box<Expression>),
+    Assignment(Box<Expression<LValue>>, Box<Expression>),
     Uninitialized,
-    Variable(Rc<LocalVar>),
     BinOp(Box<Expression>, BinOp, Box<Expression>),
     Reference(Box<Expression>),
-    Dereference(Box<Expression>),
-    DerefAccess(Box<Expression>, FieldDecl),
-    MemberAccess(Box<Expression>, FieldDecl),
+    LValue(LValue),
 }
 
 #[derive(Debug, Clone)]
-pub struct Expression {
+pub struct Expression<T = ExprKind> {
     pub typ: Rc<Type>,
-    pub kind: ExprKind,
+    pub kind: T,
 }
 
 #[derive(Debug)]

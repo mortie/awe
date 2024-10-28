@@ -590,35 +590,6 @@ pub fn cast_expr(r: &mut Reader) -> Result<ast::Expression> {
     Ok(ast::Expression::Cast(typ, Box::new(expr)))
 }
 
-/// Locator ::= '.' Ident
-/// AssignExpr ::= Ident Locator* '=' Expression
-pub fn assign_expr(r: &mut Reader) -> Result<ast::Expression> {
-    let ident = identifier(r)?;
-    if is_keyword(ident.as_str()) {
-        return Err(ParseError::inapplicable(r));
-    }
-
-    let mut locators = Vec::<ast::Locator>::new();
-    loop {
-        whitespace(r);
-        if r.peek_cmp_consume(b".") {
-            let ident = identifier(r)?;
-            locators.push(ast::Locator::MemberAccess(ident));
-        } else {
-            break;
-        }
-    }
-
-    whitespace(r);
-    if !r.peek_cmp_consume(b"=") {
-        return Err(ParseError::inapplicable(r));
-    }
-
-    let expr = expression(r)?;
-
-    Ok(ast::Expression::Assignment(ident, locators, Box::new(expr)))
-}
-
 /// UninitializedExpr ::= 'uninitialized' TypeSpec?
 pub fn uninitialized_expr(r: &mut Reader) -> Result<ast::Expression> {
     let keyword = identifier(r)?;
@@ -676,7 +647,6 @@ pub fn expression_atom(r: &mut Reader) -> Result<ast::Expression> {
     try_parse!(comb, literal_expr);
     try_parse!(comb, func_call_expr);
     try_parse!(comb, cast_expr);
-    try_parse!(comb, assign_expr);
     try_parse!(comb, uninitialized_expr);
     try_parse!(comb, group_expr);
     try_parse!(comb, variable_expr);
@@ -707,14 +677,18 @@ fn member_access_or_call_after_dot(
     Ok(ast::Expression::MethodCall(sub, ident, params))
 }
 
-/// Accessor ::= '&' | '*' | '.' Ident ('(' ExprList ')')?
-/// ExpressionPart ::= ExpressionAtom Accessor* Expression?
+/// Suffix ::= ('=' Expression) | '&' | '*' | '.' Ident ('(' ExprList ')')?
+/// ExpressionPart ::= ExpressionAtom ExprSuffix* Expression?
 pub fn expression_part(r: &mut Reader) -> Result<ast::Expression> {
     let mut expr = expression_atom(r)?;
 
     loop {
         whitespace(r);
-        if r.peek_cmp_consume(b"&") {
+        if r.peek_cmp_consume(b"=") {
+            let dest_expr = Box::new(expr);
+            let src_expr = Box::new(expression(r)?);
+            expr = ast::Expression::Assignment(dest_expr, src_expr);
+        } else if r.peek_cmp_consume(b"&") {
             let sub = Box::new(expr);
             expr = ast::Expression::Reference(sub);
         } else if r.peek_cmp_consume(b"*") {
@@ -804,7 +778,7 @@ pub fn eq_level_expr(r: &mut Reader) -> Result<ast::Expression> {
     }
 }
 
-/// Expression ::= EqLevelExpr ExprSuffix?
+/// Expression ::= EqLevelExpr
 pub fn expression(r: &mut Reader) -> Result<ast::Expression> {
     eq_level_expr(r)
 }

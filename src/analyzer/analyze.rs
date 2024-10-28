@@ -25,6 +25,7 @@ pub enum AnalysisError {
     ExpectedStruct(Rc<sst::Type>),
     ExpectedPointer(Rc<sst::Type>),
     BadStructInitializerName(Rc<String>, Rc<String>),
+    ExpectedLValue,
 
     InternalError(String),
 
@@ -66,6 +67,7 @@ impl Display for AnalysisError {
             BadStructInitializerName(expected, got) => {
                 write!(f, "Expected initializer for {expected} here, got {got}")
             }
+            ExpectedLValue => write!(f, "Expected lvalue"),
 
             InternalError(msg) => write!(f, "Internal error: {msg}"),
 
@@ -723,32 +725,22 @@ fn analyze_expression_non_typechecked(
             }
         }
 
-        ast::Expression::Assignment(ident, locators, expr) => {
-            let var = scope.lookup(ident.clone())?;
+        ast::Expression::Assignment(dest, src) => {
+            let sst_dest = analyze_expression(scope, dest, None)?;
+            let dest_typ = sst_dest.typ;
+            let sst::ExprKind::LValue(lvalue) = sst_dest.kind else {
+                return Err(AnalysisError::ExpectedLValue);
+            };
 
-            let mut typ = var.typ.clone();
-            let mut sst_locators = Vec::<sst::Locator>::new();
-            for locator in locators {
-                match locator {
-                    ast::Locator::MemberAccess(ident) => {
-                        let sst::TypeKind::Struct(s) = &var.typ.kind else {
-                            return Err(AnalysisError::ExpectedStruct(var.typ.clone()));
-                        };
+            let sst_dest = sst::Expression::<sst::LValue> {
+                typ: dest_typ,
+                kind: lvalue,
+            };
 
-                        let Some(field) = s.field(ident.as_str()) else {
-                            return Err(AnalysisError::UndeclaredMember(ident.clone()));
-                        };
-
-                        typ = field.typ.clone();
-                        sst_locators.push(sst::Locator::MemberAccess(field));
-                    }
-                }
-            }
-
-            let expr = analyze_expression(scope, expr, Some(typ.clone()))?;
+            let sst_src = analyze_expression(scope, src, Some(sst_dest.typ.clone()))?;
             sst::Expression {
-                typ,
-                kind: sst::ExprKind::Assignment(var, sst_locators, Box::new(expr)),
+                typ: sst_dest.typ.clone(),
+                kind: sst::ExprKind::Assignment(Box::new(sst_dest), Box::new(sst_src)),
             }
         }
 
@@ -772,7 +764,7 @@ fn analyze_expression_non_typechecked(
             let var = scope.lookup(name.clone())?;
             sst::Expression {
                 typ: var.typ.clone(),
-                kind: sst::ExprKind::Variable(var.clone()),
+                kind: sst::ExprKind::LValue(sst::LValue::Variable(var.clone())),
             }
         }
 
@@ -835,7 +827,7 @@ fn analyze_expression_non_typechecked(
             };
             sst::Expression {
                 typ,
-                kind: sst::ExprKind::Dereference(Box::new(sst_expr)),
+                kind: sst::ExprKind::LValue(sst::LValue::Dereference(Box::new(sst_expr))),
             }
         }
 
@@ -852,41 +844,44 @@ fn analyze_expression_non_typechecked(
             match &sst_expr.kind {
                 // If the subject is already a dereference,
                 // generate a DerefAccess instead of a Dereference + MemberAccess.
-                sst::ExprKind::Dereference(subexpr) => sst::Expression {
+                sst::ExprKind::LValue(sst::LValue::Dereference(subexpr)) => sst::Expression {
                     typ: field.typ.clone(),
-                    kind: sst::ExprKind::DerefAccess(subexpr.clone(), field),
+                    kind: sst::ExprKind::LValue(sst::LValue::DerefAccess(subexpr.clone(), field)),
                 },
 
                 // If it's a DerefAccess, apply the appropriate offset.
-                sst::ExprKind::DerefAccess(expr, base) => sst::Expression {
+                sst::ExprKind::LValue(sst::LValue::DerefAccess(expr, base)) => sst::Expression {
                     typ: field.typ.clone(),
-                    kind: sst::ExprKind::DerefAccess(
+                    kind: sst::ExprKind::LValue(sst::LValue::DerefAccess(
                         expr.clone(),
                         sst::FieldDecl {
                             name: Rc::new(format!("{}.{}", base.name, field.name)),
                             typ: field.typ.clone(),
                             offset: base.offset + field.offset,
                         },
-                    ),
+                    )),
                 },
 
                 // If it's a MemberAccess, apply the appropriate offset.
-                sst::ExprKind::MemberAccess(expr, base) => sst::Expression {
+                sst::ExprKind::LValue(sst::LValue::MemberAccess(expr, base)) => sst::Expression {
                     typ: field.typ.clone(),
-                    kind: sst::ExprKind::MemberAccess(
+                    kind: sst::ExprKind::LValue(sst::LValue::MemberAccess(
                         expr.clone(),
                         sst::FieldDecl {
                             name: Rc::new(format!("{}.{}", base.name, field.name)),
                             typ: field.typ.clone(),
                             offset: base.offset + field.offset,
                         },
-                    ),
+                    )),
                 },
 
                 // Otherwise, keep it as it is.
                 _ => sst::Expression {
                     typ: field.typ.clone(),
-                    kind: sst::ExprKind::MemberAccess(Box::new(sst_expr), field),
+                    kind: sst::ExprKind::LValue(sst::LValue::MemberAccess(
+                        Box::new(sst_expr),
+                        field,
+                    )),
                 },
             }
         }
@@ -898,7 +893,9 @@ fn analyze_expression_non_typechecked(
             // If the subject is already a dereference, don't referenc it again,
             // just use the pointer we already have
             let subject_ptr = match sst_subject.kind {
-                sst::ExprKind::Dereference(subexpr) => subexpr.as_ref().clone(),
+                sst::ExprKind::LValue(sst::LValue::Dereference(subexpr)) => {
+                    subexpr.as_ref().clone()
+                }
                 _ => sst::Expression {
                     typ: make_pointer_to(&scope.frame.borrow().ctx, &sst_subject.typ),
                     kind: sst::ExprKind::Reference(Box::new(sst_subject)),
@@ -1047,7 +1044,7 @@ fn analyze_statement(scope: &Rc<Scope>, stmt: &ast::Statement) -> Result<sst::St
                 "DEBUG: Expression has type '{}', size {}",
                 sst_expr.typ.name, sst_expr.typ.size,
             );
-            if let sst::ExprKind::Variable(var) = sst_expr.kind {
+            if let sst::ExprKind::LValue(sst::LValue::Variable(var)) = sst_expr.kind {
                 eprintln!(" -> Frame offset: {}", var.frame_offset);
             }
             Ok(sst::Statement::Empty)
