@@ -1,0 +1,32 @@
+extern func syscall_write(int, ptr[byte], ulong) long;
+extern func syscall_open(ptr[byte], int, int) int;
+extern func syscall_close(int) int;
+
+func print(str: span[byte]) void {
+	syscall_write(1, str.ptr, str.len);
+}
+
+func print_ulong(num: ulong, radix: ulong) void {
+	alphabet := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+	next := num / radix;
+	if next != 0 {
+		print_ulong(next, radix);
+	}
+
+	index := ulong(num % radix);
+	if index >= alphabet.len {
+		print("@");
+	} else {
+		chptr := ptr[byte](ulong(alphabet.ptr) + index);
+		syscall_write(1, chptr, 1);
+	}
+}
+
+func print_long(num: long, radix: ulong) void {
+	if num < 0 {
+		print("-");
+		num = 0 - num;
+	}
+	print_ulong(ulong(num), radix);
+}

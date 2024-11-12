@@ -11,6 +11,8 @@ use std::process::{self, Command};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+pub static STDLIB: &str = include_str!("stdlib.awe");
+
 struct TempFile {
     pub path: PathBuf,
     pub file: Option<fs::File>,
@@ -173,10 +175,8 @@ fn run() -> Result<()> {
         }
     }
 
-    let str = fs::read_to_string(&in_path).unwrap();
-    let mut reader = parser::reader::Reader::new(str.as_bytes());
-
-    let prog = parser::parse::program(&mut reader)?;
+    let mut prog = parser::parse::program_str(STDLIB)?;
+    prog.append(&mut parser::parse::program_str(&fs::read_to_string(&in_path)?)?);
     if parse_only {
         println!("AST: {:#?}", prog);
         process::exit(0);
