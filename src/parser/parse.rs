@@ -1170,3 +1170,8 @@ pub fn program(r: &mut Reader) -> Result<ast::Program> {
         program.push(declaration(r)?);
     }
 }
+
+pub fn program_str(s: &str) -> Result<ast::Program> {
+    let mut r = Reader::new(s.as_bytes());
+    program(&mut r)
+}
