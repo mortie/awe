@@ -9,6 +9,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+use backend::Backend;
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 pub static STDLIB: &str = include_str!("stdlib.awe");
@@ -63,11 +65,7 @@ impl TempFile {
     }
 }
 
-fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> Result<()> {
-    let Some(backend) = backend::get_backend(target) else {
-        return Err(format!("No backend for target '{target}'").into());
-    };
-
+fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, backend: &Backend) -> Result<()> {
     writeln!(w, "// <PRELUDE>")?;
     write!(w, "{}", backend.prelude)?;
     writeln!(w, "// </PRELUDE>")?;
@@ -77,11 +75,11 @@ fn codegen<W: Write>(mut w: W, prog: &analyzer::sst::Program, target: &str) -> R
     Ok(())
 }
 
-fn compile(prog: &analyzer::sst::Program, target: &str) -> Result<TempFile> {
+fn compile(prog: &analyzer::sst::Program, backend: &Backend) -> Result<TempFile> {
     let temp = TempFile::new("s")?;
     let f = &temp.file;
 
-    codegen(&mut f.as_ref().unwrap(), prog, target)?;
+    codegen(&mut f.as_ref().unwrap(), prog, backend)?;
     temp.file.as_ref().unwrap().sync_all()?;
     Ok(temp)
 }
@@ -102,12 +100,8 @@ fn assemble(asm: TempFile) -> Result<TempFile> {
     Ok(temp)
 }
 
-fn link(obj: TempFile, out_path: &Path) -> Result<()> {
-    let mut child = Command::new("ld")
-        .arg("-o")
-        .arg(out_path)
-        .arg(&obj.path)
-        .spawn()?;
+fn link(out_path: &Path, obj: TempFile, backend: &Backend) -> Result<()> {
+    let mut child = (backend.ld_command)(out_path, &obj.path).spawn()?;
     let status = child.wait()?;
     if !status.success() {
         return Err(format!("Linker exited with {}", status).into());
@@ -193,6 +187,10 @@ fn run() -> Result<()> {
         None => format!("{}-{}", env::consts::OS, env::consts::ARCH),
     };
 
+    let Some(backend) = backend::get_backend(&target) else {
+        return Err(format!("No backend for target '{target}'").into());
+    };
+
     if codegen_only {
         match out_path {
             Some(path) => {
@@ -200,9 +198,9 @@ fn run() -> Result<()> {
                 opts.write(true).truncate(true).create(true);
                 let mut file = opts.open(path)?;
 
-                codegen(&mut file, &prog, &target)?;
+                codegen(&mut file, &prog, &backend)?;
             }
-            None => codegen(&mut io::stdout(), &prog, &target)?,
+            None => codegen(&mut io::stdout(), &prog, &backend)?,
         };
 
         return Ok(());
@@ -211,12 +209,12 @@ fn run() -> Result<()> {
     let out_path =
         out_path.unwrap_or_else(|| in_path.strip_suffix(".awe").unwrap_or("a.out").to_owned());
 
-    let asm_file = compile(&prog, &target)?;
+    let asm_file = compile(&prog, &backend)?;
     let obj_file = assemble(asm_file)?;
 
     if run_only {
         let exe_file = TempFile::new("bin")?;
-        link(obj_file, &exe_file.path)?;
+        link(&exe_file.path, obj_file, &backend)?;
 
         let mut cmd = Command::new(&exe_file.path);
         for arg in args {
@@ -233,7 +231,7 @@ fn run() -> Result<()> {
     }
 
     eprintln!("Linking '{}'...", out_path);
-    link(obj_file, Path::new(&out_path))?;
+    link(Path::new(&out_path), obj_file, &backend)?;
     Ok(())
 }
 
